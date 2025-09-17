@@ -1,6 +1,19 @@
+using GenReports.Models;
+using GenReports.Services;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
+
+// Configurar opciones de caché temporal
+builder.Services.Configure<TemporaryFileCacheOptions>(
+    builder.Configuration.GetSection("TemporaryFileCache"));
+
+// Registrar servicio de caché temporal
+builder.Services.AddSingleton<ITemporaryFileCacheService, TemporaryFileCacheService>();
+
+// Registrar servicio de background para limpieza automática
+builder.Services.AddHostedService<TemporaryFileCacheCleanupService>();
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
