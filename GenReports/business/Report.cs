@@ -1,6 +1,8 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Telerik.Reporting;
 using Telerik.Reporting.Processing;
+using ICSharpCode.SharpZipLib.Zip;
+using System.IO.Compression;
 
 namespace GenReports.business
 {
@@ -230,6 +232,100 @@ namespace GenReports.business
             instanceReportSource.Parameters.Add("userNombre", userName);
             instanceReportSource.Parameters.Add("tituloReporte", $"Reporte {reportType}");
             instanceReportSource.Parameters.Add("fechaGeneracion", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+        }
+
+        /// <summary>
+        /// Ejecuta reportes masivos generando un archivo individual por cada registro y los comprime en un ZIP
+        /// </summary>
+        /// <param name="reportJson">JSON que contiene la información del reporte con la estructura: { "Data": [...] }</param>
+        /// <param name="reportType">Tipo de reporte a generar</param>
+        /// <param name="userName">Nombre del usuario que genera el reporte</param>
+        /// <returns>Archivo ZIP comprimido con todos los reportes individuales</returns>
+        public async Task<ArchivoResult> ExecuteBatchReportsCompressed(string reportJson, string reportType, string userName = "SYSTEM")
+        {
+            try
+            {
+                Console.WriteLine($"Inicio de ExecuteBatchReportsCompressed: {DateTime.Now}");
+                
+                // Validar que el JSON no esté vacío
+                if (string.IsNullOrWhiteSpace(reportJson))
+                {
+                    throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(reportJson));
+                }
+
+                // Parsear el JSON para extraer la data
+                var reportData = ExtractDataFromJson(reportJson);
+
+                if (reportData == null || !reportData.Any())
+                {
+                    throw new InvalidOperationException("No se encontraron datos en el JSON del reporte");
+                }
+
+                Console.WriteLine($"Procesando {reportData.Count} registros para reportes individuales");
+
+                // Crear un stream en memoria para el archivo ZIP
+                using var zipStream = new MemoryStream();
+                using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
+                {
+                    // Generar un reporte individual para cada registro
+                    for (int i = 0; i < reportData.Count; i++)
+                    {
+                        try
+                        {
+                            Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count}");
+                            
+                            // Crear un JSON con un solo registro
+                            var singleRecordData = new List<object> { reportData[i] };
+                            var singleRecordJson = JsonSerializer.Serialize(new { Data = singleRecordData });
+
+                            // Generar el reporte individual
+                            var reporteIndividual = GenerateTelerik(singleRecordData, reportType, userName);
+
+                            if (reporteIndividual?.BytesArchivo != null)
+                            {
+                                // Crear nombre único para el archivo dentro del ZIP
+                                var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                                
+                                // Agregar el archivo al ZIP
+                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.Optimal);
+                                using var entryStream = zipEntry.Open();
+                                await entryStream.WriteAsync(reporteIndividual.BytesArchivo, 0, reporteIndividual.BytesArchivo.Length);
+                                
+                                Console.WriteLine($"Archivo {nombreArchivo} agregado al ZIP");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Error: No se pudo generar el reporte para el registro {i + 1}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error generando reporte individual {i + 1}: {ex.Message}");
+                            // Continuar con el siguiente registro en caso de error
+                        }
+                    }
+                }
+
+                // Crear el archivo de salida comprimido
+                var nombreArchivoZip = $"{_directorioTemporal}Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                
+                var archivoComprimido = new ArchivoResult
+                {
+                    NombreArchivo = nombreArchivoZip,
+                    BytesArchivo = zipStream.ToArray(),
+                    Usuario = userName,
+                    FechaGeneracion = DateTime.Now
+                };
+
+                Console.WriteLine($"Archivo ZIP generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
+                
+                return archivoComprimido;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error en ExecuteBatchReportsCompressed: {ex.Message}");
+                throw;
+            }
         }
     }
 

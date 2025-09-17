@@ -18,14 +18,18 @@ namespace GenReports.Helpers
             if (archivo == null)
                 throw new ArgumentNullException(nameof(archivo));
 
-            return new UFile
+            var uFile = new UFile
             {
                 NombreArchivo = archivo.NombreArchivo,
                 BytesArchivo = archivo.BytesArchivo,
                 Usuario = archivo.Usuario,
-                FechaGeneracion = archivo.FechaGeneracion,
-                ContentType = "application/pdf" // Asumiendo que siempre son PDFs
+                FechaGeneracion = archivo.FechaGeneracion
             };
+
+            // Detectar automáticamente el tipo de contenido
+            uFile.DetectContentType();
+
+            return uFile;
         }
     }
 }

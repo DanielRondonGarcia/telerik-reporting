@@ -34,5 +34,25 @@ namespace GenReports.Models
         /// Tamaño del archivo en bytes
         /// </summary>
         public long TamanoBytes => BytesArchivo?.Length ?? 0;
+
+        /// <summary>
+        /// Detecta automáticamente el tipo de contenido basado en la extensión del archivo
+        /// </summary>
+        public void DetectContentType()
+        {
+            if (string.IsNullOrEmpty(NombreArchivo))
+                return;
+
+            var extension = Path.GetExtension(NombreArchivo).ToLowerInvariant();
+            ContentType = extension switch
+            {
+                ".pdf" => "application/pdf",
+                ".zip" => "application/zip",
+                ".json" => "application/json",
+                ".xml" => "application/xml",
+                ".txt" => "text/plain",
+                _ => "application/octet-stream"
+            };
+        }
     }
 }

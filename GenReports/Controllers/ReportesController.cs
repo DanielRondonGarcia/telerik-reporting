@@ -15,14 +15,35 @@ namespace GenReports.Controllers
     public class ReportesController : ControllerBase
     {
         /// <summary>
-        /// Endpoint para generar reportes usando Telerik con datos JSON
+        /// Genera reportes basados en los datos JSON proporcionados.
+        /// - Para un solo registro: retorna un archivo PDF individual
+        /// - Para múltiples registros: genera reportes individuales por cada registro y los comprime en un archivo ZIP
         /// </summary>
-        /// <param name="dataSource">Objeto JSON que contiene los datos del reporte</param>
+        /// <param name="dataSource">Datos en formato JSON para generar el reporte. Debe contener una propiedad "Data" con los registros</param>
         /// <param name="reportType">Tipo de reporte a generar (opcional, por defecto "USUARIO")</param>
         /// <param name="userName">Nombre del usuario que genera el reporte (opcional, por defecto "SYSTEM")</param>
-        /// <returns>Archivo PDF generado</returns>
+        /// <returns>
+        /// - Archivo PDF para un solo registro
+        /// - Archivo ZIP con múltiples PDFs para múltiples registros
+        /// </returns>
         /// <remarks>
-        /// Ejemplo de request body:
+        /// El endpoint detecta automáticamente si se envían múltiples registros en el array "Data" 
+        /// y genera reportes individuales comprimidos para optimizar la transferencia de datos masivos.
+        /// 
+        /// Ejemplo de JSON para un solo registro:
+        /// {
+        ///   "Data": { "campo1": "valor1", "campo2": "valor2" }
+        /// }
+        /// 
+        /// Ejemplo de JSON para múltiples registros:
+        /// {
+        ///   "Data": [
+        ///     { "campo1": "valor1", "campo2": "valor2" },
+        ///     { "campo1": "valor3", "campo2": "valor4" }
+        ///   ]
+        /// }
+        /// 
+        /// Ejemplo completo de request body:
         /// 
         ///     POST /api/reportes/telerik/json/file/batch
         ///     {
@@ -65,17 +86,17 @@ namespace GenReports.Controllers
         ///     }
         /// 
         /// </remarks>
-        /// <response code="200">Reporte generado exitosamente</response>
+        /// <response code="200">Reporte generado exitosamente (PDF individual o ZIP con múltiples PDFs)</response>
         /// <response code="500">Error interno del servidor</response>
         [HttpPost("telerik/json/file/batch")]
         [SwaggerOperation(
-            Summary = "Generar reporte con datos JSON",
-            Description = "Genera un reporte PDF usando Telerik con los datos JSON proporcionados. Acepta cualquier estructura JSON válida.",
+            Summary = "Generar reportes con datos JSON (individual o masivo)",
+            Description = "Genera reportes PDF usando Telerik con los datos JSON proporcionados. Detecta automáticamente si es un registro único o múltiples registros y genera la salida correspondiente (PDF individual o ZIP con múltiples PDFs).",
             OperationId = "GenerateReport"
         )]
-        [SwaggerResponse(200, "Reporte generado exitosamente", typeof(ApiResponse<UFile>))]
+        [SwaggerResponse(200, "Reporte(s) generado(s) exitosamente", typeof(ApiResponse<UFile>))]
         [SwaggerResponse(500, "Error interno del servidor", typeof(ApiResponse<UFile>))]
-        public IActionResult GenerateReport(
+        public async Task<IActionResult> GenerateReport(
             [FromBody] 
             [SwaggerRequestBody(
                 Description = "Datos JSON para generar el reporte. Puede contener cualquier estructura JSON válida.",
@@ -109,8 +130,21 @@ namespace GenReports.Controllers
                 // Crear instancia del negocio de reportes
                 var reporteNegocio = new Report();
 
-                // Generar el reporte
-                fileOutput = reporteNegocio.ExecuteReport(jsonString, reportType, userName);
+                // Determinar si es un reporte masivo (múltiples registros)
+                var isMultipleRecords = IsMultipleRecords(jsonString);
+                
+                if (isMultipleRecords)
+                {
+                    Console.WriteLine("Detectados múltiples registros - Generando reportes individuales comprimidos");
+                    // Generar reportes individuales comprimidos
+                    fileOutput = await reporteNegocio.ExecuteBatchReportsCompressed(jsonString, reportType, userName);
+                }
+                else
+                {
+                    Console.WriteLine("Detectado registro único - Generando reporte individual");
+                    // Generar reporte único como antes
+                    fileOutput = reporteNegocio.ExecuteReport(jsonString, reportType, userName);
+                }
 
                 stopwatch.Stop();
                 Console.WriteLine($"Tiempo total del telerik/json/file/batch: {DateTime.Now} -> {stopwatch.Elapsed}");
@@ -139,6 +173,42 @@ namespace GenReports.Controllers
                 };
 
                 return StatusCode(500, errorResponse);
+            }
+        }
+
+        /// <summary>
+        /// Determina si el JSON contiene múltiples registros
+        /// </summary>
+        /// <param name="jsonString">JSON string a analizar</param>
+        /// <returns>True si contiene múltiples registros, False si es un solo registro</returns>
+        private bool IsMultipleRecords(string jsonString)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(jsonString);
+                var root = document.RootElement;
+
+                // Verificar que existe la propiedad "Data"
+                if (!root.TryGetProperty("Data", out var dataElement))
+                {
+                    return false;
+                }
+
+                // Si Data es un array con más de un elemento, es masivo
+                if (dataElement.ValueKind == JsonValueKind.Array)
+                {
+                    var arrayLength = dataElement.GetArrayLength();
+                    Console.WriteLine($"Número de registros detectados: {arrayLength}");
+                    return arrayLength > 1;
+                }
+
+                // Si Data no es un array, es un solo registro
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error analizando JSON para detectar múltiples registros: {ex.Message}");
+                return false;
             }
         }
     }
