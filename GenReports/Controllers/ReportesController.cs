@@ -17,10 +17,12 @@ namespace GenReports.Controllers
     public class ReportesController : ControllerBase
     {
         private readonly ITemporaryFileCacheService _cacheService;
+        private readonly Report _reportService;
 
-        public ReportesController(ITemporaryFileCacheService cacheService)
+        public ReportesController(ITemporaryFileCacheService cacheService, Report reportService)
         {
             _cacheService = cacheService;
+            _reportService = reportService;
         }
         /// <summary>
         /// Genera reportes basados en los datos JSON proporcionados.
@@ -179,8 +181,8 @@ namespace GenReports.Controllers
 
                 Console.WriteLine("Archivo no encontrado en caché, generando nuevo reporte...");
 
-                // Crear instancia del negocio de reportes
-                var reporteNegocio = new Report();
+                // Usar instancia del negocio de reportes inyectada
+                var reporteNegocio = _reportService;
 
                 // Determinar si es un reporte masivo (múltiples registros)
                 var isMultipleRecords = IsMultipleRecords(jsonString);
@@ -424,8 +426,8 @@ namespace GenReports.Controllers
 
                 Console.WriteLine("Archivo no encontrado en caché, generando nuevo reporte consolidado...");
 
-                // Crear instancia del negocio de reportes
-                var reporteNegocio = new Report();
+                // Usar instancia del negocio de reportes inyectada
+                var reporteNegocio = _reportService;
 
                 Console.WriteLine("Generando reporte consolidado y aplicando split...");
                 // Generar reporte consolidado y aplicar split

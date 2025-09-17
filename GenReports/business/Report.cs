@@ -4,6 +4,8 @@ using Telerik.Reporting.Processing;
 using ICSharpCode.SharpZipLib.Zip;
 using System.IO.Compression;
 using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf.Streaming;
+using Microsoft.Extensions.Options;
+using GenReports.Models;
 
 namespace GenReports.business
 {
@@ -11,11 +13,25 @@ namespace GenReports.business
     {
         private readonly string _directorioTemporal;
         private readonly string _urlBaseReportes;
+        private readonly ReportsConfiguration _reportsConfig;
 
+        public Report(IOptions<ReportsConfiguration> reportsConfig, string urlBaseReportes = "")
+        {
+            _reportsConfig = reportsConfig.Value ?? throw new ArgumentNullException(nameof(reportsConfig));
+            _directorioTemporal = _reportsConfig.TemporaryDirectory;
+            _urlBaseReportes = urlBaseReportes;
+        }
+
+        // Constructor para compatibilidad hacia atrás (opcional)
         public Report(string directorioTemporal = @"C:\temp\", string urlBaseReportes = "")
         {
             _directorioTemporal = directorioTemporal;
             _urlBaseReportes = urlBaseReportes;
+            _reportsConfig = new ReportsConfiguration
+            {
+                BasePath = @".\reports",
+                TemporaryDirectory = directorioTemporal
+            };
         }
 
         /// <summary>
@@ -118,8 +134,8 @@ namespace GenReports.business
         {
             try
             {
-                // Ruta de la plantilla del reporte
-                var plantillaPath = @"C:\Listados\GEN\REPORTES\telerik\GEN_INFO_USUARIO_T.json.batch.trdp";
+                // Ruta de la plantilla del reporte usando configuración parametrizada
+                var plantillaPath = Path.Combine(_reportsConfig.BasePath, "GEN_INFO_USUARIO_T.json.batch.trdp");
 
                 // Verificar que existe la plantilla
                 if (!File.Exists(plantillaPath))

@@ -1,5 +1,6 @@
 using GenReports.Models;
 using GenReports.Services;
+using GenReports.business;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,8 +10,15 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<TemporaryFileCacheOptions>(
     builder.Configuration.GetSection("TemporaryFileCache"));
 
+// Configurar opciones de reportes
+builder.Services.Configure<ReportsConfiguration>(
+    builder.Configuration.GetSection("ReportsConfiguration"));
+
 // Registrar servicio de caché temporal
 builder.Services.AddSingleton<ITemporaryFileCacheService, TemporaryFileCacheService>();
+
+// Registrar servicio de reportes
+builder.Services.AddScoped<Report>();
 
 // Registrar servicio de background para limpieza automática
 builder.Services.AddHostedService<TemporaryFileCacheCleanupService>();

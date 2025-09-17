@@ -26,5 +26,18 @@ RUN dotnet publish "./GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/publish
 # Esta fase se usa en producción o cuando se ejecuta desde VS en modo normal (valor predeterminado cuando no se usa la configuración de depuración)
 FROM base AS final
 WORKDIR /app
+
+# Crear directorio para reportes
+RUN mkdir -p /app/reports
+
+# Copiar la aplicación publicada
 COPY --from=publish /app/publish .
+
+# Copiar plantillas de reportes si existen en el directorio local
+# Nota: Asegúrate de tener una carpeta 'reports' en tu proyecto con las plantillas .trdp
+COPY reports/ /app/reports/ 2>/dev/null || echo "No se encontraron plantillas de reportes para copiar"
+
+# Establecer permisos para el directorio de reportes
+RUN chmod -R 755 /app/reports
+
 ENTRYPOINT ["dotnet", "GenReports.dll"]
