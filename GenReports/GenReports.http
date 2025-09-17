@@ -1,0 +1,6 @@
+@GenReports_HostAddress = http://localhost:5222
+
+GET {{GenReports_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

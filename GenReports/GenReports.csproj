@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>15e62a64-b386-4b6c-b4a6-739e358579a9</UserSecretsId>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.22.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="6.6.2" />
+    <PackageReference Include="Telerik.Documents.Fixed" Version="2025.3.806" />
+    <PackageReference Include="Telerik.Reporting" Version="19.2.25.813" />
+    <PackageReference Include="Telerik.Reporting.Services.AspNetCore" Version="19.2.25.813" />
+    <PackageReference Include="Telerik.Reporting.WebServiceDataSource" Version="19.2.25.813" />
+  </ItemGroup>
+
+</Project>
