@@ -7,6 +7,7 @@ using System.Text.Json;
 using Telerik.Reporting;
 using Telerik.Reporting.Processing;
 using System.Collections.Concurrent;
+using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf.Streaming;
 
 namespace GenReports.business
 {
@@ -509,7 +510,7 @@ namespace GenReports.business
                 }
 
                 // PASO 2: Dividir el PDF consolidado en archivos individuales
-                var build = await SplitPdfIntoIndividualFiles(reporteConsolidado.BytesArchivo, reportData.Count, userName);
+                var build = await SplitPdfIntoIndividualFilesTelerik(reporteConsolidado.BytesArchivo, reportData.Count, userName);
 
                 var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
 
@@ -658,6 +659,79 @@ namespace GenReports.business
 
             Console.WriteLine($"PDF consolidado generado. Tamaño: {consolidado.BytesArchivo.Length} bytes");
             return consolidado;
+        }
+
+        /// <summary>
+        /// Divide un PDF consolidado en archivos individuales por página utilizando Telerik PdfStreamWriter/PdfFileSource
+        /// </summary>
+        /// <param name="consolidatedPdfBytes">Bytes del PDF consolidado</param>
+        /// <param name="recordCount">Número de registros (para validación)</param>
+        /// <param name="userName">Nombre del usuario</param>
+        /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
+        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFilesTelerik(byte[] consolidatedPdfBytes, int recordCount, string userName)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                Console.WriteLine($"[Telerik] Iniciando split del PDF consolidado. Tamaño: {consolidatedPdfBytes.Length} bytes");
+
+                using var inputStream = new MemoryStream(consolidatedPdfBytes);
+                using var fileSource = new PdfFileSource(inputStream);
+
+                int totalPages = fileSource.Pages.Length;
+                Console.WriteLine($"[Telerik] PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
+
+                var entries = new List<ArchiveEntry>(capacity: totalPages);
+
+                for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
+                {
+                    try
+                    {
+                        using var ms = new MemoryStream();
+                        // Dejar el stream abierto para poder tomar los bytes después de disponer el writer
+                        using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                        {
+                            var pageSource = fileSource.Pages[pageIndex];
+                            writer.WritePage(pageSource);
+                        }
+
+                        var individualPdfBytes = ms.ToArray();
+                        if (individualPdfBytes.Length == 0)
+                        {
+                            Console.WriteLine($"[Telerik] Advertencia: La página {pageIndex + 1} resultó en un PDF vacío");
+                            continue;
+                        }
+
+                        var nombreArchivo = $"Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                        entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
+                        Console.WriteLine($"[Telerik] Página {pageIndex + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Telerik] Error procesando página {pageIndex + 1}: {ex.Message}");
+                    }
+                }
+
+                var compressor = new ArchiveCompressor();
+                var build = await compressor.CreateArchivePrefer7zAsync(entries);
+                sw.Stop();
+                Console.WriteLine($"[Telerik] Split + compresión completados en {sw.Elapsed}. Formato: {build.Extension}. Tamaño: {build.Bytes.Length} bytes");
+                return build;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                Console.WriteLine($"[Telerik] Error en SplitPdfIntoIndividualFilesTelerik tras {sw.Elapsed}: {ex.Message}");
+                Console.WriteLine($"[Telerik] StackTrace: {ex.StackTrace}");
+
+                // Fallback: devolver ZIP con el PDF consolidado
+                var compressor = new ArchiveCompressor();
+                var build = await compressor.CreateArchivePrefer7zAsync(new[]
+                {
+                    new ArchiveEntry($"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf", consolidatedPdfBytes)
+                });
+                return build;
+            }
         }
     }
 

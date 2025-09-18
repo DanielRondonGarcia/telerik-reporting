@@ -23,6 +23,10 @@
     <PackageReference Include="Telerik.Reporting" Version="19.2.25.813" />
     <PackageReference Include="Telerik.Reporting.Services.AspNetCore" Version="19.2.25.813" />
     <PackageReference Include="Telerik.Reporting.WebServiceDataSource" Version="19.2.25.813" />
+    <!-- Telerik Document Processing (PdfStreamWriter/PdfFileSource) -->
+    <PackageReference Include="Telerik.Documents.Core" Version="19.2.25.813" />
+    <PackageReference Include="Telerik.Documents.Fixed" Version="19.2.25.813" />
+    <PackageReference Include="Telerik.Zip" Version="19.2.25.813" />
   </ItemGroup>
 
 </Project>
