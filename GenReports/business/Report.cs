@@ -6,6 +6,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using Telerik.Reporting;
 using Telerik.Reporting.Processing;
+using System.Collections.Concurrent;
 
 namespace GenReports.business
 {
@@ -392,7 +393,7 @@ namespace GenReports.business
 
                 Console.WriteLine($"Procesando {reportData.Count} registros para reportes individuales");
 
-                var entries = new List<ArchiveEntry>();
+                var entries = new ConcurrentBag<ArchiveEntry>();
                 // Generar un reporte individual para cada registro
                 for (int i = 0; i < reportData.Count; i++)
                 {
@@ -494,7 +495,7 @@ namespace GenReports.business
                 try
                 {
                     using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
-                    using var verifyDoc = PdfReader.Open(verifyStream, PdfDocumentOpenMode.ReadOnly);
+                    using var verifyDoc = PdfReader.Open(verifyStream, PdfDocumentOpenMode.Import);
                     var consolidatedPages = verifyDoc.PageCount;
                     if (consolidatedPages < 2 || consolidatedPages != reportData.Count)
                     {
@@ -544,65 +545,65 @@ namespace GenReports.business
             {
                 Console.WriteLine($"Iniciando split del PDF consolidado. Tamaño: {consolidatedPdfBytes.Length} bytes");
 
-                var entries = new List<ArchiveEntry>();
-
-                // Crear un stream del PDF consolidado
+                // entries handled via entriesArr
                 using var pdfStream = new MemoryStream(consolidatedPdfBytes);
                 using var inputDocument = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Import);
                 int totalPages = inputDocument.PageCount;
-                    Console.WriteLine($"PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
+                Console.WriteLine($"PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
+                var entriesArr = new ArchiveEntry[totalPages];
+                var pageCopyLock = new object();
 
-                    if (totalPages == 1 && recordCount > 1)
+                // Dividir cada página en un archivo individual
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
+                Parallel.For(0, totalPages, parallelOptions, pageNumber =>
+                 {
+                    try
                     {
-                        Console.WriteLine("Advertencia: El PDF consolidado tiene 1 sola página pero hay múltiples registros. Verifique su plantilla .trdp para que cada registro genere una página (por ejemplo, usando un List/Group con PageBreak).");
-                    }
+                        Console.WriteLine($"Procesando página {pageNumber + 1} de {totalPages}");
 
-                    // Dividir cada página en un archivo individual
-                    for (int pageNumber = 0; pageNumber < totalPages; pageNumber++)
-                    {
-                        try
+                        // Crear un nuevo PDF con solo esta página
+                        using var outputStream = new MemoryStream();
+                        var outputDocument = new PdfDocument();
+
+                        // Copiar la página específica al nuevo documento
+                        lock (pageCopyLock)
                         {
-                            Console.WriteLine($"Procesando página {pageNumber + 1} de {totalPages}");
-
-                            // Crear un nuevo PDF con solo esta página
-                            using var outputStream = new MemoryStream();
-                            var outputDocument = new PdfDocument();
-
-                            // Copiar la página específica al nuevo documento
                             var page = inputDocument.Pages[pageNumber];
                             outputDocument.AddPage(page);
-
-                            // Guardar el documento de salida
-                            outputDocument.Save(outputStream);
-                            outputDocument.Close();
-
-                            // Obtener los bytes del PDF individual
-                            var individualPdfBytes = outputStream.ToArray();
-
-                            if (individualPdfBytes.Length > 0)
-                            {
-                                // Crear nombre único para el archivo
-                                var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-
-                                // Agregar a la colección para compresión
-                                entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
-
-                                Console.WriteLine($"Página {pageNumber + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"Advertencia: La página {pageNumber + 1} resultó en un PDF vacío");
-                            }
                         }
-                        catch (Exception ex)
+
+                        // Guardar el documento de salida
+                        outputDocument.Save(outputStream);
+                        outputDocument.Close();
+
+                        // Obtener los bytes del PDF individual
+                        var individualPdfBytes = outputStream.ToArray();
+
+                        if (individualPdfBytes.Length > 0)
                         {
-                            Console.WriteLine($"Error procesando página {pageNumber + 1}: {ex.Message}");
-                            // Continuar con la siguiente página en caso de error
+                            // Crear nombre único para el archivo
+                            var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+
+                            // Agregar a la colección para compresión
+                            entriesArr[pageNumber] = new ArchiveEntry(nombreArchivo, individualPdfBytes);
+
+                            Console.WriteLine($"Página {pageNumber + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Advertencia: La página {pageNumber + 1} resultó en un PDF vacío");
                         }
                     }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error procesando página {pageNumber + 1}: {ex.Message}");
+                        // Continuar con la siguiente página en caso de error
+                    }
+                });
 
-                    Console.WriteLine($"Split completado. Total de páginas procesadas: {totalPages}");
-
+                // Asegurar orden estable por número de página después de paralelizar
+                var entries = entriesArr.Where(e => e != null)!;
+                
                 var compressor = new ArchiveCompressor();
                 var build = await compressor.CreateArchivePrefer7zAsync(entries);
                 Console.WriteLine($"Archivo comprimido (split) generado en formato {build.Extension}. Tamaño: {build.Bytes.Length} bytes");
