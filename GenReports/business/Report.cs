@@ -8,6 +8,10 @@ using Telerik.Reporting;
 using Telerik.Reporting.Processing;
 using System.Collections.Concurrent;
 using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf.Streaming;
+using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf;
+using Telerik.Windows.Documents.Fixed.Model;
+using Telerik.Windows.Documents.Fixed.Model.Navigation;
+using Telerik.Windows.Documents.Fixed.Model.Actions;
 
 namespace GenReports.business
 {
@@ -89,10 +93,20 @@ namespace GenReports.business
                 using var document = JsonDocument.Parse(reportJson);
                 var root = document.RootElement;
 
-                // Verificar que existe la propiedad "Data"
-                if (!root.TryGetProperty("Data", out var dataElement))
+                // Intentar obtener la propiedad "Data" sin sensibilidad a mayúsculas/minúsculas
+                JsonElement dataElement;
+                if (!TryGetPropertyCaseInsensitive(root, "Data", out dataElement))
                 {
-                    throw new InvalidOperationException("El JSON debe contener una propiedad 'Data'");
+                    // Si no existe, aceptar también cuando la raíz es un arreglo
+                    if (root.ValueKind == JsonValueKind.Array)
+                    {
+                        dataElement = root;
+                    }
+                    else
+                    {
+                        // Considerar el objeto completo como un solo registro
+                        dataElement = root;
+                    }
                 }
 
                 // Convertir la data a una lista de objetos
@@ -102,7 +116,6 @@ namespace GenReports.business
                 {
                     foreach (var item in dataElement.EnumerateArray())
                     {
-                        // Convertir cada elemento a un objeto dinámico
                         var itemObject = JsonSerializer.Deserialize<object>(item.GetRawText());
                         if (itemObject != null)
                         {
@@ -112,7 +125,6 @@ namespace GenReports.business
                 }
                 else
                 {
-                    // Si Data no es un array, agregar el objeto único
                     var singleObject = JsonSerializer.Deserialize<object>(dataElement.GetRawText());
                     if (singleObject != null)
                     {
@@ -120,12 +132,30 @@ namespace GenReports.business
                     }
                 }
 
+                Console.WriteLine($"[JSON] Registros extraídos: {dataList.Count}");
                 return dataList;
             }
             catch (JsonException ex)
             {
                 throw new ArgumentException($"Error parseando el JSON: {ex.Message}", nameof(reportJson));
             }
+        }
+
+        private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = prop.Value;
+                        return true;
+                    }
+                }
+            }
+            value = default;
+            return false;
         }
 
         /// <summary>
@@ -260,45 +290,59 @@ namespace GenReports.business
         {
             try
             {
-                // Buscar todos los objetos JsonDataSource en el reporte
                 var jsonDataSources = FindJsonDataSources(report);
 
                 if (jsonDataSources.Count == 0)
                 {
                     Console.WriteLine("No se encontraron JsonDataSource en el reporte. Se intentará agregar uno automáticamente.");
 
-                    // Crear un JsonDataSource básico si no existe
                     var dataSource = new Telerik.Reporting.JsonDataSource();
-
-                    // Convertir los datos en un JSON que represente un array
                     var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
                     var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
 
-                    // Asignar el contenido JSON como Source (API correcta)
                     dataSource.Source = jsonArray;
+                    // Forzar DataSelector = "$" si la propiedad existe en esta versión
+                    TrySetProperty(dataSource, "DataSelector", "$");
 
-                    // Asignar el JsonDataSource al reporte
                     report.DataSource = dataSource;
-                    Console.WriteLine("Se agregó automáticamente un JsonDataSource al reporte");
+                    Console.WriteLine($"Se agregó automáticamente un JsonDataSource al reporte (registros: {reportData.Count})");
                 }
                 else
                 {
                     Console.WriteLine($"Se encontraron {jsonDataSources.Count} JsonDataSource en el reporte. Configurando...");
 
-                    // Configurar cada JsonDataSource con los datos proporcionados
                     foreach (var dataSource in jsonDataSources)
                     {
                         var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
                         var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
-                        // Asignar el contenido JSON como Source (API correcta)
                         dataSource.Source = jsonArray;
+                        // Forzar DataSelector = "$" si la propiedad existe en esta versión
+                        TrySetProperty(dataSource, "DataSelector", "$");
                     }
+                    Console.WriteLine($"JsonDataSource configurado con {reportData.Count} registros");
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error configurando el origen de datos: {ex.Message}");
                 throw;
+            }
+        }
+
+        private static void TrySetProperty(object instance, string propertyName, object? value)
+        {
+            try
+            {
+                var prop = instance.GetType().GetProperty(propertyName);
+                if (prop != null && prop.CanWrite)
+                {
+                    prop.SetValue(instance, value);
+                    Console.WriteLine($"[DataSource] Establecido {propertyName} = {value}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DataSource] No fue posible establecer {propertyName}: {ex.Message}");
             }
         }
 
@@ -681,34 +725,114 @@ namespace GenReports.business
                 int totalPages = fileSource.Pages.Length;
                 Console.WriteLine($"[Telerik] PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
 
-                var entries = new List<ArchiveEntry>(capacity: totalPages);
+                var entries = new List<ArchiveEntry>();
 
-                for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
+                // 1) Intentar dividir por Bookmarks (Document Map)
+                RadFixedDocument? fixedDoc = null;
+                List<(string title, int pageIndex)> bookmarkStarts = new();
+                try
                 {
-                    try
-                    {
-                        using var ms = new MemoryStream();
-                        // Dejar el stream abierto para poder tomar los bytes después de disponer el writer
-                        using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
-                        {
-                            var pageSource = fileSource.Pages[pageIndex];
-                            writer.WritePage(pageSource);
-                        }
+                    using var importStream = new MemoryStream(consolidatedPdfBytes);
+                    var provider = new PdfFormatProvider();
+                    fixedDoc = provider.Import(importStream);
+                    bookmarkStarts = GetBookmarkStartPages(fixedDoc);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Telerik] No fue posible leer bookmarks: {ex.Message}. Se intentará fallback por página.");
+                }
 
-                        var individualPdfBytes = ms.ToArray();
-                        if (individualPdfBytes.Length == 0)
+                if (bookmarkStarts.Count > 0 && fixedDoc != null)
+                {
+                    Console.WriteLine($"[Telerik] Se encontraron {bookmarkStarts.Count} bookmarks. Dividiendo por rangos de páginas (RadFixedDocument)...");
+
+                    for (int i = 0; i < bookmarkStarts.Count; i++)
+                    {
+                        var start = bookmarkStarts[i].pageIndex;
+                        var end = (i < bookmarkStarts.Count - 1) ? bookmarkStarts[i + 1].pageIndex - 1 : totalPages - 1;
+
+                        if (start < 0 || start >= totalPages || end < start)
                         {
-                            Console.WriteLine($"[Telerik] Advertencia: La página {pageIndex + 1} resultó en un PDF vacío");
+                            Console.WriteLine($"[Telerik] Rango inválido derivado de bookmarks: {start}-{end}. Se omite.");
                             continue;
                         }
 
-                        var nombreArchivo = $"Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                        using var ms = new MemoryStream();
+                        // Escribir usando RadFixedDocument (mismas páginas que resolvieron los bookmarks)
+                        using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                        {
+                            for (int p = start; p <= end; p++)
+                            {
+                                var srcPage = fixedDoc.Pages[p];
+                                using var pageWriter = writer.BeginPage(srcPage.Size, srcPage.Rotation);
+                                pageWriter.WriteContent(srcPage);
+                                Console.WriteLine($"[Telerik]  - Escribiendo página {p + 1} (RadFixed)");
+                            }
+                        }
+
+                        var individualPdfBytes = ms.ToArray();
+
+                        // Fallback de robustez: si el tamaño es muy pequeño (< 1KB), reintentar con PdfFileSource.WritePage
+                        if (individualPdfBytes.Length < 1024)
+                        {
+                            Console.WriteLine($"[Telerik]  - Documento pequeño ({individualPdfBytes.Length} bytes). Reintentando con PdfFileSource.WritePage para {start + 1}-{end + 1}...");
+                            ms.SetLength(0);
+                            using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                            {
+                                for (int p = start; p <= end; p++)
+                                {
+                                    var pageSource = fileSource.Pages[p];
+                                    writer.WritePage(pageSource);
+                                    Console.WriteLine($"[Telerik]  - Escribiendo página {p + 1} (FileSource)");
+                                }
+                            }
+                            individualPdfBytes = ms.ToArray();
+                        }
+
+                        if (individualPdfBytes.Length == 0)
+                        {
+                            Console.WriteLine($"[Telerik] Advertencia: El rango {start + 1}-{end + 1} resultó en un PDF vacío");
+                            continue;
+                        }
+
+                        var baseName = string.IsNullOrWhiteSpace(bookmarkStarts[i].title) ? $"Registro_{i + 1:D4}" : SanitizeFileName(bookmarkStarts[i].title);
+                        var nombreArchivo = $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
                         entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
-                        Console.WriteLine($"[Telerik] Página {pageIndex + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                        Console.WriteLine($"[Telerik] Rango {start + 1}-{end + 1} preparado como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
                     }
-                    catch (Exception ex)
+                }
+
+                // 2) Fallback: si no hay entries por bookmarks, usar split hoja por hoja (comportamiento anterior)
+                if (entries.Count == 0)
+                {
+                    Console.WriteLine("[Telerik] No se generaron entradas por bookmarks. Aplicando split por página...");
+
+                    for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
                     {
-                        Console.WriteLine($"[Telerik] Error procesando página {pageIndex + 1}: {ex.Message}");
+                        try
+                        {
+                            using var ms = new MemoryStream();
+                            using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                            {
+                                var pageSource = fileSource.Pages[pageIndex];
+                                writer.WritePage(pageSource);
+                            }
+
+                            var individualPdfBytes = ms.ToArray();
+                            if (individualPdfBytes.Length == 0)
+                            {
+                                Console.WriteLine($"[Telerik] Advertencia: La página {pageIndex + 1} resultó en un PDF vacío");
+                                continue;
+                            }
+
+                            var nombreArchivo = $"Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                            entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
+                            Console.WriteLine($"[Telerik] Página {pageIndex + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Telerik] Error procesando página {pageIndex + 1}: {ex.Message}");
+                        }
                     }
                 }
 
@@ -732,6 +856,105 @@ namespace GenReports.business
                 });
                 return build;
             }
+        }
+
+        // Extrae las páginas de inicio de cada bookmark (Document Map) y las ordena
+        private static List<(string title, int pageIndex)> GetBookmarkStartPages(RadFixedDocument document)
+        {
+            var list = new List<(string title, int pageIndex)>();
+            if (document == null) return list;
+
+            int? ResolvePageIndex(BookmarkItem b)
+            {
+                try
+                {
+                    // Preferir Destination directo
+                    var dest = b.Destination;
+                    if (dest?.Page != null)
+                    {
+                        int idx = document.Pages.IndexOf(dest.Page);
+                        if (idx >= 0) return idx;
+                    }
+
+                    // Luego NamedDestination -> Destination
+                    var nd = b.NamedDestination;
+                    if (nd?.Destination?.Page != null)
+                    {
+                        int idx = document.Pages.IndexOf(nd.Destination.Page);
+                        if (idx >= 0) return idx;
+                    }
+
+                    // Nota: en esta versión de Telerik no existe BookmarkItem.Actions
+                    // Se mantiene compatibilidad usando la propiedad obsoleta 'Action' cuando aplique.
+#pragma warning disable CS0618
+                    if (b.Action is GoToAction go2)
+                    {
+                        if (go2.Destination?.Page != null)
+                        {
+                            int idx = document.Pages.IndexOf(go2.Destination.Page);
+                            if (idx >= 0) return idx;
+                        }
+                        if (go2.NamedDestination?.Destination?.Page != null)
+                        {
+                            int idx = document.Pages.IndexOf(go2.NamedDestination.Destination.Page);
+                            if (idx >= 0) return idx;
+                        }
+                    }
+#pragma warning restore CS0618
+                }
+                catch { }
+                return null;
+            }
+
+            void Visit(IEnumerable<BookmarkItem> items)
+            {
+                foreach (var b in items)
+                {
+                    try
+                    {
+                        var idx = ResolvePageIndex(b);
+                        Console.WriteLine($"[Telerik] Bookmark: '{b.Title}' => pageIndex: {(idx.HasValue ? idx.Value.ToString() : "null")}");
+                        if (idx.HasValue)
+                        {
+                            list.Add((b.Title, idx.Value));
+                        }
+                    }
+                    catch { /* ignorar bookmark inválido */ }
+
+                    if (b.Children != null && b.Children.Count > 0)
+                    {
+                        Visit(b.Children);
+                    }
+                }
+            }
+
+            Visit(document.Bookmarks);
+
+            // Ordenar y deduplicar por pageIndex
+            var result = list
+                .GroupBy(x => x.pageIndex)
+                .Select(g => g.First())
+                .OrderBy(x => x.pageIndex)
+                .ToList();
+
+            Console.WriteLine($"[Telerik] Bookmarks válidos encontrados: {result.Count}");
+            for (int i = 0; i < result.Count; i++)
+            {
+                Console.WriteLine($"[Telerik]  #{i + 1}: page={result[i].pageIndex + 1}, title='{result[i].title}'");
+            }
+
+            return result;
+        }
+
+        // Sanea un texto para usarlo como nombre de archivo
+        private static string SanitizeFileName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "Archivo";
+            var invalid = Path.GetInvalidFileNameChars();
+            var sanitized = new string(value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray()).Trim();
+            // Evitar nombres extremadamente largos
+            if (sanitized.Length > 120) sanitized = sanitized.Substring(0, 120);
+            return string.IsNullOrWhiteSpace(sanitized) ? "Archivo" : sanitized;
         }
     }
 
