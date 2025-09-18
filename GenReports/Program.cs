@@ -1,6 +1,7 @@
 using GenReports.Models;
 using GenReports.Services;
 using GenReports.business;
+using Telerik.Reporting.Processing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,7 +19,7 @@ builder.Services.Configure<ReportsConfiguration>(
 builder.Services.AddSingleton<ITemporaryFileCacheService, TemporaryFileCacheService>();
 
 // Registrar servicio de reportes
-builder.Services.AddScoped<Report>();
+builder.Services.AddScoped<GenReports.business.Report>();
 
 // Registrar servicio de background para limpieza automática
 builder.Services.AddHostedService<TemporaryFileCacheCleanupService>();
@@ -46,6 +47,9 @@ builder.Services.AddSwaggerGen(c =>
         c.IncludeXmlComments(xmlPath);
     }
 });
+
+// SkiaSharp graphics engine is enabled via Telerik.Drawing.Skia package for Linux compatibility
+Console.WriteLine("Using Skia graphics engine for Telerik Reporting on Linux");
 
 var app = builder.Build();
 

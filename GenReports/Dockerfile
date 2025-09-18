@@ -12,9 +12,9 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
-COPY ["GenReports/GenReports.csproj", "GenReports/"]
+COPY ["GenReports.csproj", "GenReports/"]
 RUN dotnet restore "./GenReports/GenReports.csproj"
-COPY . .
+COPY . ./GenReports/
 WORKDIR "/src/GenReports"
 RUN dotnet build "./GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
@@ -27,17 +27,35 @@ RUN dotnet publish "./GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/publish
 FROM base AS final
 WORKDIR /app
 
+# Cambiar temporalmente a root para crear directorios, instalar dependencias y establecer permisos
+USER root
+
+# Instalar dependencias de Linux necesarias para SkiaSharp
+RUN apt-get update \
+    && apt-get install -y --allow-unauthenticated \
+    libc6-dev \
+    libfreetype6 \
+    libfontconfig1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Crear directorio para reportes
 RUN mkdir -p /app/reports
 
 # Copiar la aplicación publicada
 COPY --from=publish /app/publish .
 
-# Copiar plantillas de reportes si existen en el directorio local
-# Nota: Asegúrate de tener una carpeta 'reports' en tu proyecto con las plantillas .trdp
-COPY reports/ /app/reports/ 2>/dev/null || echo "No se encontraron plantillas de reportes para copiar"
+# Copiar plantillas de reportes desde el directorio padre
+# Las plantillas están en ../reports/ relativo al Dockerfile
+COPY ./GenReports/reports/ /app/reports/
 
 # Establecer permisos para el directorio de reportes
-RUN chmod -R 755 /app/reports
+RUN chmod -R 755 /app/reports && \
+    chown -R $APP_UID:$APP_UID /app/reports
+
+# Establecer variable de entorno para usar configuración de Docker
+ENV ASPNETCORE_ENVIRONMENT=Docker
+
+# Volver al usuario de aplicación
+USER $APP_UID
 
 ENTRYPOINT ["dotnet", "GenReports.dll"]

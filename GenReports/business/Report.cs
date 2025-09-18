@@ -3,7 +3,6 @@ using Telerik.Reporting;
 using Telerik.Reporting.Processing;
 using ICSharpCode.SharpZipLib.Zip;
 using System.IO.Compression;
-using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf.Streaming;
 using Microsoft.Extensions.Options;
 using GenReports.Models;
 
@@ -22,17 +21,7 @@ namespace GenReports.business
             _urlBaseReportes = urlBaseReportes;
         }
 
-        // Constructor para compatibilidad hacia atrás (opcional)
-        public Report(string directorioTemporal = @"C:\temp\", string urlBaseReportes = "")
-        {
-            _directorioTemporal = directorioTemporal;
-            _urlBaseReportes = urlBaseReportes;
-            _reportsConfig = new ReportsConfiguration
-            {
-                BasePath = @".\reports",
-                TemporaryDirectory = directorioTemporal
-            };
-        }
+
 
         /// <summary>
         /// Método principal que ejecuta un reporte de acuerdo al tipo del mismo
@@ -70,6 +59,21 @@ namespace GenReports.business
                 Console.WriteLine($"Error ejecutando reporte: {ex.Message}");
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Mapea el tipo de reporte al nombre del archivo .trdp correspondiente
+        /// </summary>
+        /// <param name="reportType">Tipo de reporte</param>
+        /// <returns>Nombre del archivo .trdp</returns>
+        private string GetReportTemplateFileName(string reportType)
+        {
+            return reportType?.ToUpper() switch
+            {
+                "USUARIO" => "GEN_INFO_USUARIO_T.json.batch.trdp",
+                "USUARIO_MASIVO" => "GEN_INFO_USUARIO_MASIVO_T.trdp",
+                _ => throw new ArgumentException($"Tipo de reporte no soportado: {reportType}")
+            };
         }
 
         /// <summary>
@@ -134,13 +138,22 @@ namespace GenReports.business
         {
             try
             {
-                // Ruta de la plantilla del reporte usando configuración parametrizada
-                var plantillaPath = Path.Combine(_reportsConfig.BasePath, "GEN_INFO_USUARIO_T.json.batch.trdp");
+                // Mapear el tipo de reporte al archivo .trdp correspondiente
+                var plantillaFileName = GetReportTemplateFileName(reportType);
+                var plantillaPath = Path.Combine(_reportsConfig.BasePath, plantillaFileName);
+
+                Console.WriteLine($"Buscando plantilla para reportType '{reportType}': {plantillaPath}");
 
                 // Verificar que existe la plantilla
                 if (!File.Exists(plantillaPath))
                 {
-                    throw new FileNotFoundException($"No se encuentra el archivo de plantilla del reporte: {plantillaPath}");
+                    // Listar archivos disponibles para debugging
+                    var availableFiles = Directory.Exists(_reportsConfig.BasePath) 
+                        ? Directory.GetFiles(_reportsConfig.BasePath, "*.trdp")
+                        : new string[0];
+                    
+                    var availableList = string.Join(", ", availableFiles.Select(Path.GetFileName));
+                    throw new FileNotFoundException($"No se encuentra el archivo de plantilla del reporte: {plantillaPath}. Archivos disponibles: {availableList}");
                 }
 
                 // Crear el procesador de reportes
@@ -153,9 +166,37 @@ namespace GenReports.business
                 var reportPackager = new ReportPackager();
                 Telerik.Reporting.Report reportDefinition;
                 
-                using (var fs = new FileStream(plantillaPath, FileMode.Open, FileAccess.Read))
+                try
                 {
-                    reportDefinition = (Telerik.Reporting.Report)reportPackager.UnpackageDocument(fs);
+                    using (var fs = new FileStream(plantillaPath, FileMode.Open, FileAccess.Read))
+                    {
+                        // Intentar cargar el reporte con manejo específico para problemas de serialización
+                        var document = reportPackager.UnpackageDocument(fs);
+                        reportDefinition = document as Telerik.Reporting.Report;
+                        
+                        if (reportDefinition == null)
+                        {
+                            throw new InvalidOperationException($"El archivo {plantillaPath} no contiene un reporte válido de Telerik");
+                        }
+                    }
+                    Console.WriteLine($"Reporte cargado exitosamente desde: {plantillaPath}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error cargando el reporte desde {plantillaPath}: {ex.Message}");
+                    Console.WriteLine($"Tipo de excepción: {ex.GetType().Name}");
+                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                    
+                    // Si es un error de serialización, proporcionar más información
+                    if (ex.Message.Contains("ReportSerializable") || ex.Message.Contains("serialization"))
+                    {
+                        throw new InvalidOperationException($"Error de serialización al cargar la plantilla del reporte. " +
+                            $"Esto puede deberse a incompatibilidad entre la versión de Telerik usada para crear el archivo .trdp " +
+                            $"y la versión actual, o problemas de compatibilidad entre Windows/Linux. " +
+                            $"Archivo: {plantillaPath}. Error original: {ex.Message}", ex);
+                    }
+                    
+                    throw new InvalidOperationException($"Error cargando la plantilla del reporte: {ex.Message}", ex);
                 }
 
                 // Configurar el origen de datos
@@ -172,13 +213,26 @@ namespace GenReports.business
 
                 // Renderizar el reporte
                 var formatoSalida = "PDF";
-                var resultado = telerikReportProcessor.RenderReport(formatoSalida, instanceReportSource, deviceInfo);
+                RenderingResult resultado;
+                
+                try
+                {
+                    Console.WriteLine("Iniciando procesamiento del reporte...");
+                    resultado = telerikReportProcessor.RenderReport(formatoSalida, instanceReportSource, deviceInfo);
+                    Console.WriteLine($"Reporte procesado. Tiene errores: {resultado.HasErrors}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error durante el procesamiento del reporte: {ex.Message}");
+                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                    throw new InvalidOperationException($"Error durante el procesamiento del reporte: {ex.Message}", ex);
+                }
 
                 // Verificar errores
                 if (resultado.HasErrors)
                 {
                     var errores = string.Join("; ", resultado.Errors.Select(e => e.Message));
-                    Console.WriteLine($"Errores en la generación del reporte: {errores}");
+                    Console.WriteLine($"El reporte tiene errores: {errores}");
                     
                     if (resultado.DocumentBytes == null)
                     {
@@ -186,53 +240,112 @@ namespace GenReports.business
                     }
                 }
 
-                // Crear el archivo de salida
-                var nombreArchivo = $"{_directorioTemporal}Reporte_{reportType}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                
-                var archivoSalida = new ArchivoResult
+                // Devolver el archivo como PDF
+                var nombreArchivo = $"Reporte_{reportType}_{DateTime.Now:yyyyMMddHHmmss}.pdf";
+                return new ArchivoResult
                 {
-                    NombreArchivo = nombreArchivo,
                     BytesArchivo = resultado.DocumentBytes,
-                    Usuario = userName,
-                    FechaGeneracion = DateTime.Now
+                    NombreArchivo = nombreArchivo
                 };
-
-                return archivoSalida;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error en GenerateTelerik: {ex.Message}");
+                Console.WriteLine($"Error generando el reporte con Telerik: {ex.Message}");
                 throw;
             }
         }
 
-        /// <summary>
-        /// Configura el origen de datos del reporte
-        /// </summary>
-        /// <param name="reportDefinition">Definición del reporte</param>
-        /// <param name="reportData">Datos del reporte</param>
-        private void ConfigureDataSource(Telerik.Reporting.Report reportDefinition, List<object> reportData)
+        private void ConfigureDataSource(Telerik.Reporting.Report report, List<object> reportData)
         {
-            // Convertir los datos a JSON string
-            var jsonString = JsonSerializer.Serialize(reportData);
-            
-            // Buscar el JsonDataSource en el reporte
-            var jsonDataSource = reportDefinition.DataSource as JsonDataSource;
-            
-            if (jsonDataSource != null)
+            try
             {
-                // Asignar los datos como JSON string al JsonDataSource
-                jsonDataSource.Source = jsonString;
-            }
-            else
-            {
-                // Si no hay JsonDataSource, crear uno nuevo
-                var newJsonDataSource = new JsonDataSource
+                // Buscar todos los objetos JsonDataSource en el reporte
+                var jsonDataSources = FindJsonDataSources(report);
+                
+                if (jsonDataSources.Count == 0)
                 {
-                    Source = jsonString
-                };
-                reportDefinition.DataSource = newJsonDataSource;
+                    Console.WriteLine("No se encontraron JsonDataSource en el reporte. Se intentará agregar uno automáticamente.");
+                    
+                    // Crear un JsonDataSource básico si no existe
+                    var dataSource = new Telerik.Reporting.JsonDataSource();
+                    
+                    // Convertir los datos en un JSON que represente un array
+                    var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
+                    var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
+                    
+                    // Asignar el contenido JSON como Source (API correcta)
+                    dataSource.Source = jsonArray;
+                    
+                    // Asignar el JsonDataSource al reporte
+                    report.DataSource = dataSource;
+                    Console.WriteLine("Se agregó automáticamente un JsonDataSource al reporte");
+                }
+                else
+                {
+                    Console.WriteLine($"Se encontraron {jsonDataSources.Count} JsonDataSource en el reporte. Configurando...");
+                    
+                    // Configurar cada JsonDataSource con los datos proporcionados
+                    foreach (var dataSource in jsonDataSources)
+                    {
+                        var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
+                        var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
+                        // Asignar el contenido JSON como Source (API correcta)
+                        dataSource.Source = jsonArray;
+                    }
+                }
             }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error configurando el origen de datos: {ex.Message}");
+                throw;
+            }
+        }
+
+        // Helper: Busca de forma recursiva todos los JsonDataSource en el reporte y en los data items anidados
+        private List<Telerik.Reporting.JsonDataSource> FindJsonDataSources(Telerik.Reporting.Report report)
+        {
+            var result = new List<Telerik.Reporting.JsonDataSource>();
+
+            try
+            {
+                // Incluir el DataSource del propio reporte si corresponde
+                if (report.DataSource is Telerik.Reporting.JsonDataSource jds)
+                {
+                    result.Add(jds);
+                }
+
+                // Recorrido recursivo por los items del reporte
+                void ScanItem(Telerik.Reporting.ReportItemBase item)
+                {
+                    if (item is Telerik.Reporting.DataItem di)
+                    {
+                        if (di.DataSource is Telerik.Reporting.JsonDataSource jds2)
+                        {
+                            result.Add(jds2);
+                        }
+                    }
+
+                    // Recorrer hijos si existen
+                    if (item.Items != null)
+                    {
+                        foreach (var child in item.Items)
+                        {
+                            ScanItem(child);
+                        }
+                    }
+                }
+
+                foreach (var item in report.Items)
+                {
+                    ScanItem(item);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Advertencia en FindJsonDataSources: {ex.Message}");
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -323,8 +436,8 @@ namespace GenReports.business
                     }
                 }
 
-                // Crear el archivo de salida comprimido
-                var nombreArchivoZip = $"{_directorioTemporal}Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                // Crear el archivo de salida comprimido con nombre simple (sin ruta completa)
+                var nombreArchivoZip = $"Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
                 
                 var archivoComprimido = new ArchivoResult
                 {
@@ -354,200 +467,29 @@ namespace GenReports.business
         /// <returns>ArchivoResult con el archivo ZIP que contiene los PDFs divididos</returns>
         public async Task<ArchivoResult> ExecuteConsolidatedReportWithSplit(string jsonString, string reportType, string userName = "SYSTEM")
         {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            
-            try
-            {
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Iniciando generación de reporte consolidado...");
-                
-                // Validar JSON
-                if (string.IsNullOrEmpty(jsonString))
-                {
-                    throw new ArgumentException("El JSON no puede estar vacío");
-                }
-
-                // Generar el reporte consolidado con todos los datos
-                var consolidatedReport = ExecuteReport(jsonString, reportType, userName);
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Reporte consolidado generado en {stopwatch.ElapsedMilliseconds}ms");
-
-                // Verificar que el reporte consolidado tiene datos válidos
-                if (consolidatedReport?.BytesArchivo == null || consolidatedReport.BytesArchivo.Length == 0)
-                {
-                    throw new InvalidOperationException("El reporte consolidado no generó datos válidos");
-                }
-
-                // Crear una copia independiente de los bytes del PDF para evitar problemas de stream cerrado
-                var pdfBytes = new byte[consolidatedReport.BytesArchivo.Length];
-                Array.Copy(consolidatedReport.BytesArchivo, pdfBytes, consolidatedReport.BytesArchivo.Length);
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] PDF consolidado copiado: {pdfBytes.Length} bytes");
-
-                // Extraer datos para determinar cuántos registros hay
-                var dataList = ExtractDataFromJson(jsonString);
-                if (dataList == null || dataList.Count == 0)
-                {
-                    throw new ArgumentException("No se encontraron datos válidos en el JSON");
-                }
-
-                var recordCount = dataList.Count;
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Dividiendo PDF consolidado en {recordCount} archivos individuales...");
-
-                // Aplicar split al PDF consolidado usando la copia independiente
-                var splitStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                var zipBytes = await SplitPdfIntoIndividualFiles(pdfBytes, recordCount, userName);
-                splitStopwatch.Stop();
-                
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Split completado en {splitStopwatch.ElapsedMilliseconds}ms");
-                
-                stopwatch.Stop();
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Proceso total completado en {stopwatch.ElapsedMilliseconds}ms");
-
-                return new ArchivoResult
-                {
-                    NombreArchivo = $"ReportesConsolidados_{DateTime.Now:yyyyMMdd_HHmmss}.zip",
-                    BytesArchivo = zipBytes,
-                    Usuario = userName,
-                    FechaGeneracion = DateTime.Now
-                };
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                Console.WriteLine($"[CONSOLIDADO+SPLIT] Error después de {stopwatch.ElapsedMilliseconds}ms: {ex.Message}");
-                throw new Exception($"Error generando reporte consolidado con split: {ex.Message}", ex);
-            }
+            // En lugar de dividir un PDF consolidado (lo que requería Telerik.Documents.Fixed),
+            // utilizamos el flujo ya existente de generación individual por registro y compresión.
+            return await ExecuteBatchReportsCompressed(jsonString, reportType, userName);
         }
 
         /// <summary>
-        /// Divide un PDF consolidado en archivos individuales usando PdfStreamWriter de Telerik
-        /// Optimizado para usar archivos temporales en disco y reducir el consumo de RAM
+        /// Fallback simple que empaqueta el PDF consolidado en un ZIP sin dividir.
+        /// Se mantiene para compatibilidad pero no se usa por defecto.
         /// </summary>
-        /// <param name="consolidatedPdfBytes">Bytes del PDF consolidado</param>
-        /// <param name="recordCount">Número de registros (páginas por archivo)</param>
-        /// <param name="userName">Usuario que genera el reporte</param>
-        /// <returns>Bytes del archivo ZIP con los PDFs divididos</returns>
         private async Task<byte[]> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
         {
-            // Crear directorio temporal único para este proceso
-            var tempDir = Path.Combine(Path.GetTempPath(), $"PdfSplit_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(tempDir);
-            
-            var tempZipPath = Path.Combine(tempDir, "consolidated_reports.zip");
-            var tempPdfPath = Path.Combine(tempDir, "source.pdf");
-            
-            try
+            using var zipStream = new MemoryStream();
+            using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
             {
-                // Escribir el PDF consolidado a disco temporalmente
-                await File.WriteAllBytesAsync(tempPdfPath, consolidatedPdfBytes);
-                Console.WriteLine($"[SPLIT] PDF consolidado guardado temporalmente en: {tempPdfPath}");
-                
-                // Crear el archivo ZIP en disco
-                using (var zipFileStream = new FileStream(tempZipPath, FileMode.Create, FileAccess.Write))
-                using (var zipArchive = new ZipArchive(zipFileStream, ZipArchiveMode.Create))
-                {
-                    int totalPages;
-                    try
-                    {
-                        using (var tempFileStream = new FileStream(tempPdfPath, FileMode.Open, FileAccess.Read))
-                        using (var tempFileSource = new PdfFileSource(tempFileStream))
-                        {
-                            totalPages = tempFileSource.Pages.Length;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[SPLIT] Error al leer el PDF consolidado inicial: {ex.Message}");
-                        throw new InvalidOperationException("No se pudo leer el PDF consolidado para determinar el número de páginas.", ex);
-                    }
-
-                    if (totalPages == 0)
-                    {
-                        Console.WriteLine("[SPLIT] El PDF consolidado no tiene páginas.");
-                        return Array.Empty<byte>();
-                    }
-
-                    int pagesPerRecord = Math.Max(1, totalPages / recordCount);
-                    Console.WriteLine($"[SPLIT] PDF consolidado tiene {totalPages} páginas, dividiendo en {recordCount} archivos de ~{pagesPerRecord} páginas cada uno.");
-
-                    int currentPageIndex = 0;
-                    for (int recordIndex = 0; recordIndex < recordCount; recordIndex++)
-                    {
-                        int startPage = currentPageIndex;
-                        int endPage = (recordIndex == recordCount - 1)
-                            ? totalPages - 1
-                            : Math.Min(startPage + pagesPerRecord - 1, totalPages - 1);
-
-                        if (startPage > endPage || startPage >= totalPages)
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            // Crear archivo temporal para este PDF individual
-                            var tempIndividualPdfPath = Path.Combine(tempDir, $"temp_report_{recordIndex}.pdf");
-                            
-                            using (var pdfFileStream = new FileStream(tempPdfPath, FileMode.Open, FileAccess.Read))
-                            using (var fileToSplit = new PdfFileSource(pdfFileStream))
-                            {
-                                var entryName = $"Reporte_{recordIndex + 1}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                                var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.Optimal);
-
-                                // Crear el PDF individual en disco temporal
-                                using (var individualFileStream = new FileStream(tempIndividualPdfPath, FileMode.Create, FileAccess.Write))
-                                {
-                                    using (var writer = new PdfStreamWriter(individualFileStream))
-                                    {
-                                        Console.WriteLine($"[SPLIT] Procesando registro {recordIndex + 1}: páginas {startPage} a {endPage}");
-                                        for (int i = startPage; i <= endPage; i++)
-                                        {
-                                            writer.WritePage(fileToSplit.Pages[i]);
-                                        }
-                                    }
-                                }
-                                
-                                // Copiar el archivo temporal al ZIP
-                                using (var entryStream = zipEntry.Open())
-                                using (var individualFileReadStream = new FileStream(tempIndividualPdfPath, FileMode.Open, FileAccess.Read))
-                                {
-                                    await individualFileReadStream.CopyToAsync(entryStream);
-                                }
-                                
-                                // Eliminar el archivo temporal individual inmediatamente
-                                File.Delete(tempIndividualPdfPath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"[SPLIT] Error procesando el registro {recordIndex + 1} (páginas {startPage}-{endPage}): {ex.Message}");
-                            throw;
-                        }
-
-                        currentPageIndex = endPage + 1;
-                    }
-                }
-                
-                // Leer el archivo ZIP final y retornarlo como bytes
-                var zipBytes = await File.ReadAllBytesAsync(tempZipPath);
-                Console.WriteLine($"[SPLIT] Proceso completado. ZIP generado con tamaño: {zipBytes.Length / 1024 / 1024:F2} MB");
-                return zipBytes;
+                var entryName = $"ReporteConsolidado_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.Optimal);
+                await using var entryStream = zipEntry.Open();
+                await entryStream.WriteAsync(consolidatedPdfBytes, 0, consolidatedPdfBytes.Length);
             }
-            finally
-            {
-                // Limpieza automática de archivos temporales
-                try
-                {
-                    if (Directory.Exists(tempDir))
-                    {
-                        Directory.Delete(tempDir, true);
-                        Console.WriteLine($"[SPLIT] Directorio temporal limpiado: {tempDir}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[SPLIT] Advertencia: No se pudo limpiar el directorio temporal {tempDir}: {ex.Message}");
-                }
-            }
+            return zipStream.ToArray();
         }
+
+        // Método GuardarAsync eliminado de Report; use ArchivoResult.GuardarAsync
     }
 
     /// <summary>
