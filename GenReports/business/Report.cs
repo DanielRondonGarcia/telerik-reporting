@@ -392,61 +392,55 @@ namespace GenReports.business
 
                 Console.WriteLine($"Procesando {reportData.Count} registros para reportes individuales");
 
-                // Crear un stream en memoria para el archivo ZIP
-                using var zipStream = new MemoryStream();
-                using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
+                var entries = new List<ArchiveEntry>();
+                // Generar un reporte individual para cada registro
+                for (int i = 0; i < reportData.Count; i++)
                 {
-                    // Generar un reporte individual para cada registro
-                    for (int i = 0; i < reportData.Count; i++)
+                    try
                     {
-                        try
+                        Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count}");
+
+                        var singleRecordData = new List<object> { reportData[i] };
+
+                        // Generar el reporte individual
+                        var reporteIndividual = GenerateTelerik(singleRecordData, reportType, userName);
+
+                        if (reporteIndividual?.BytesArchivo != null)
                         {
-                            Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count}");
+                            // Crear nombre único para el archivo dentro del contenedor
+                            var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
 
-                            // Crear un JSON con un solo registro
-                            var singleRecordData = new List<object> { reportData[i] };
-                            var singleRecordJson = JsonSerializer.Serialize(new { Data = singleRecordData });
-
-                            // Generar el reporte individual
-                            var reporteIndividual = GenerateTelerik(singleRecordData, reportType, userName);
-
-                            if (reporteIndividual?.BytesArchivo != null)
-                            {
-                                // Crear nombre único para el archivo dentro del ZIP
-                                var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-
-                                // Agregar el archivo al ZIP
-                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.SmallestSize);
-                                using var entryStream = zipEntry.Open();
-                                await entryStream.WriteAsync(reporteIndividual.BytesArchivo, 0, reporteIndividual.BytesArchivo.Length);
-
-                                Console.WriteLine($"Archivo {nombreArchivo} agregado al ZIP");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"Error: No se pudo generar el reporte para el registro {i + 1}");
-                            }
+                            // Agregar a la lista de entradas para compresión
+                            entries.Add(new ArchiveEntry(nombreArchivo, reporteIndividual.BytesArchivo));
+                            Console.WriteLine($"Archivo {nombreArchivo} preparado para compresión");
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            Console.WriteLine($"Error generando reporte individual {i + 1}: {ex.Message}");
-                            // Continuar con el siguiente registro en caso de error
+                            Console.WriteLine($"Error: No se pudo generar el reporte para el registro {i + 1}");
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error generando reporte individual {i + 1}: {ex.Message}");
+                        // Continuar con el siguiente registro en caso de error
                     }
                 }
 
+                var compressor = new ArchiveCompressor();
+                var build = await compressor.CreateArchivePrefer7zAsync(entries);
+
                 // Crear el archivo de salida comprimido con nombre simple (sin ruta completa)
-                var nombreArchivoZip = $"Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                var nombreArchivoZip = $"Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
 
                 var archivoComprimido = new ArchivoResult
                 {
                     NombreArchivo = nombreArchivoZip,
-                    BytesArchivo = zipStream.ToArray(),
+                    BytesArchivo = build.Bytes,
                     Usuario = userName,
                     FechaGeneracion = DateTime.Now
                 };
 
-                Console.WriteLine($"Archivo ZIP generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
+                Console.WriteLine($"Archivo comprimido generado exitosamente ({build.Extension}): {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
 
                 return archivoComprimido;
             }
@@ -514,20 +508,19 @@ namespace GenReports.business
                 }
 
                 // PASO 2: Dividir el PDF consolidado en archivos individuales
-                var zipBytes = await SplitPdfIntoIndividualFiles(reporteConsolidado.BytesArchivo, reportData.Count, userName);
+                var build = await SplitPdfIntoIndividualFiles(reporteConsolidado.BytesArchivo, reportData.Count, userName);
 
-                // Crear el archivo de salida comprimido
-                var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
 
                 var archivoComprimido = new ArchivoResult
                 {
                     NombreArchivo = nombreArchivoZip,
-                    BytesArchivo = zipBytes,
+                    BytesArchivo = build.Bytes,
                     Usuario = userName,
                     FechaGeneracion = DateTime.Now
                 };
 
-                Console.WriteLine($"Archivo ZIP con split generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
+                Console.WriteLine($"Archivo comprimido con split generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
 
                 return archivoComprimido;
             }
@@ -545,19 +538,18 @@ namespace GenReports.business
         /// <param name="recordCount">Número de registros (para validación)</param>
         /// <param name="userName">Nombre del usuario</param>
         /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
-        private async Task<byte[]> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
+        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
         {
             try
             {
                 Console.WriteLine($"Iniciando split del PDF consolidado. Tamaño: {consolidatedPdfBytes.Length} bytes");
 
-                using var zipStream = new MemoryStream();
-                using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
-                {
-                    // Crear un stream del PDF consolidado
-                    using var pdfStream = new MemoryStream(consolidatedPdfBytes);
-                    using var inputDocument = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Import);
-                    int totalPages = inputDocument.PageCount;
+                var entries = new List<ArchiveEntry>();
+
+                // Crear un stream del PDF consolidado
+                using var pdfStream = new MemoryStream(consolidatedPdfBytes);
+                using var inputDocument = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Import);
+                int totalPages = inputDocument.PageCount;
                     Console.WriteLine($"PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
 
                     if (totalPages == 1 && recordCount > 1)
@@ -589,15 +581,13 @@ namespace GenReports.business
 
                             if (individualPdfBytes.Length > 0)
                             {
-                                // Crear nombre único para el archivo dentro del ZIP
+                                // Crear nombre único para el archivo
                                 var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
 
-                                // Agregar el archivo al ZIP
-                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.SmallestSize);
-                                using var entryStream = zipEntry.Open();
-                                await entryStream.WriteAsync(individualPdfBytes, 0, individualPdfBytes.Length);
+                                // Agregar a la colección para compresión
+                                entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
 
-                                Console.WriteLine($"Página {pageNumber + 1} guardada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                                Console.WriteLine($"Página {pageNumber + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
                             }
                             else
                             {
@@ -612,28 +602,25 @@ namespace GenReports.business
                     }
 
                     Console.WriteLine($"Split completado. Total de páginas procesadas: {totalPages}");
-                }
 
-                var zipBytes = zipStream.ToArray();
-                Console.WriteLine($"ZIP generado con tamaño: {zipBytes.Length} bytes");
-                return zipBytes;
+                var compressor = new ArchiveCompressor();
+                var build = await compressor.CreateArchivePrefer7zAsync(entries);
+                Console.WriteLine($"Archivo comprimido (split) generado en formato {build.Extension}. Tamaño: {build.Bytes.Length} bytes");
+                return build;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error en SplitPdfIntoIndividualFiles: {ex.Message}");
                 Console.WriteLine($"StackTrace: {ex.StackTrace}");
 
-                // En caso de error, crear un ZIP con el PDF original como fallback
+                // En caso de error, crear un archivo comprimido con el PDF original como fallback
                 Console.WriteLine("Creando fallback con PDF consolidado original...");
-                using var fallbackZipStream = new MemoryStream();
-                using (var zipArchive = new ZipArchive(fallbackZipStream, ZipArchiveMode.Create, true))
+                var compressor = new ArchiveCompressor();
+                var build = await compressor.CreateArchivePrefer7zAsync(new[]
                 {
-                    var entryName = $"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                    var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.SmallestSize);
-                    await using var entryStream = zipEntry.Open();
-                    await entryStream.WriteAsync(consolidatedPdfBytes, 0, consolidatedPdfBytes.Length);
-                }
-                return fallbackZipStream.ToArray();
+                    new ArchiveEntry($"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf", consolidatedPdfBytes)
+                });
+                return build;
             }
         }
 
