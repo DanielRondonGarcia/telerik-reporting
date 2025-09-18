@@ -382,7 +382,7 @@ namespace GenReports.Controllers
                 string inputHash;
                 using (var md5 = MD5.Create())
                 {
-                    var inputBytes = System.Text.Encoding.UTF8.GetBytes($"{jsonString}_{reportType}_{userName}_consolidated");
+                    var inputBytes = System.Text.Encoding.UTF8.GetBytes($"{jsonString}_consolidated");
                     var hashBytes = md5.ComputeHash(inputBytes);
                     inputHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
                 }

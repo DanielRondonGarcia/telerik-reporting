@@ -416,7 +416,7 @@ namespace GenReports.business
                                 var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
 
                                 // Agregar el archivo al ZIP
-                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.Optimal);
+                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.SmallestSize);
                                 using var entryStream = zipEntry.Open();
                                 await entryStream.WriteAsync(reporteIndividual.BytesArchivo, 0, reporteIndividual.BytesArchivo.Length);
 
@@ -593,7 +593,7 @@ namespace GenReports.business
                                 var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
 
                                 // Agregar el archivo al ZIP
-                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.Optimal);
+                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.SmallestSize);
                                 using var entryStream = zipEntry.Open();
                                 await entryStream.WriteAsync(individualPdfBytes, 0, individualPdfBytes.Length);
 
@@ -629,7 +629,7 @@ namespace GenReports.business
                 using (var zipArchive = new ZipArchive(fallbackZipStream, ZipArchiveMode.Create, true))
                 {
                     var entryName = $"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                    var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.Optimal);
+                    var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.SmallestSize);
                     await using var entryStream = zipEntry.Open();
                     await entryStream.WriteAsync(consolidatedPdfBytes, 0, consolidatedPdfBytes.Length);
                 }
