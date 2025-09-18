@@ -1,14 +1,10 @@
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using GenReports.business;
 using GenReports.Models;
-using GenReports.Helpers;
 using GenReports.Services;
-using System.Diagnostics;
-using System.Text.Json;
-using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace GenReports.Controllers
 {
@@ -24,6 +20,7 @@ namespace GenReports.Controllers
             _cacheService = cacheService;
             _reportService = reportService;
         }
+
         /// <summary>
         /// Genera reportes basados en los datos JSON proporcionados.
         /// - Para un solo registro: retorna un archivo PDF individual
@@ -37,14 +34,14 @@ namespace GenReports.Controllers
         /// - Archivo ZIP con múltiples PDFs para múltiples registros
         /// </returns>
         /// <remarks>
-        /// El endpoint detecta automáticamente si se envían múltiples registros en el array "Data" 
+        /// El endpoint detecta automáticamente si se envían múltiples registros en el array "Data"
         /// y genera reportes individuales comprimidos para optimizar la transferencia de datos masivos.
-        /// 
+        ///
         /// Ejemplo de JSON para un solo registro:
         /// {
         ///   "Data": { "campo1": "valor1", "campo2": "valor2" }
         /// }
-        /// 
+        ///
         /// Ejemplo de JSON para múltiples registros:
         /// {
         ///   "Data": [
@@ -52,9 +49,9 @@ namespace GenReports.Controllers
         ///     { "campo1": "valor3", "campo2": "valor4" }
         ///   ]
         /// }
-        /// 
+        ///
         /// Ejemplo completo de request body:
-        /// 
+        ///
         ///     POST /api/reportes/telerik/json/file/batch
         ///     {
         ///       "Data": [
@@ -94,7 +91,7 @@ namespace GenReports.Controllers
         ///         }
         ///       ]
         ///     }
-        /// 
+        ///
         /// </remarks>
         /// <response code="200">Reporte generado exitosamente (PDF individual o ZIP con múltiples PDFs)</response>
         /// <response code="500">Error interno del servidor</response>
@@ -107,28 +104,28 @@ namespace GenReports.Controllers
         [SwaggerResponse(200, "Reporte(s) generado(s) exitosamente", typeof(ApiResponse<UFileDownload>))]
         [SwaggerResponse(500, "Error interno del servidor", typeof(ApiResponse<UFileDownload>))]
         public async Task<IActionResult> GenerateReport(
-            [FromBody] 
+            [FromBody]
             [SwaggerRequestBody(
                 Description = "Datos JSON para generar el reporte. Puede contener cualquier estructura JSON válida.",
                 Required = true
-            )] 
-            object dataSource, 
-            [FromQuery] 
+            )]
+            object dataSource,
+            [FromQuery]
             [SwaggerParameter(
                 Description = "Tipo de reporte a generar",
                 Required = false
-            )] 
-            string reportType = "USUARIO", 
-            [FromQuery] 
+            )]
+            string reportType = "USUARIO",
+            [FromQuery]
             [SwaggerParameter(
                 Description = "Nombre del usuario que genera el reporte",
                 Required = false
-            )] 
+            )]
             string userName = "SYSTEM")
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             ArchivoResult? fileOutput = null;
-            
+
             try
             {
                 Console.WriteLine($"=== ENDPOINT BATCH INICIADO ===");
@@ -154,11 +151,11 @@ namespace GenReports.Controllers
                 if (cachedFile != null)
                 {
                     Console.WriteLine($"Archivo encontrado en caché: {cachedFile.OriginalFileName}");
-                    
+
                     // Generar URL de descarga
                     var requestBaseUrl = $"{Request.Scheme}://{Request.Host}";
                     var downloadUrl = _cacheService.GenerateDownloadUrl(cachedFile.DownloadToken, requestBaseUrl);
-                    
+
                     var cachedResponse = new ApiResponse<UFileDownload>
                     {
                         Data = new UFileDownload
@@ -186,7 +183,7 @@ namespace GenReports.Controllers
 
                 // Determinar si es un reporte masivo (múltiples registros)
                 var isMultipleRecords = IsMultipleRecords(jsonString);
-                
+
                 if (isMultipleRecords)
                 {
                     Console.WriteLine("Detectados múltiples registros - Generando reportes individuales comprimidos");
@@ -206,14 +203,14 @@ namespace GenReports.Controllers
                 }
 
                 // Detectar tipo de contenido basado en la extensión
-                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) 
-                    ? "application/zip" 
+                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    ? "application/zip"
                     : "application/pdf";
 
                 // Almacenar en caché temporal con hash personalizado
                 var tempFileInfo = await _cacheService.StoreFileAsync(
-                    fileOutput.BytesArchivo, 
-                    fileOutput.NombreArchivo, 
+                    fileOutput.BytesArchivo,
+                    fileOutput.NombreArchivo,
                     contentType,
                     inputHash
                 );
@@ -294,9 +291,7 @@ namespace GenReports.Controllers
                 Console.WriteLine($"Error analizando JSON para detectar múltiples registros: {ex.Message}");
                 return false;
             }
-         }
-
-
+        }
 
         /// <summary>
         /// Calcula el hash MD5 de una cadena de texto
@@ -324,9 +319,9 @@ namespace GenReports.Controllers
         /// 1. Genera UN solo reporte PDF consolidado con todos los registros
         /// 2. Aplica split usando PdfStreamWriter de Telerik para dividirlo en archivos individuales
         /// 3. Comprime los archivos resultantes en un ZIP
-        /// 
+        ///
         /// Úsalo para comparar rendimiento contra el método de generación individual (/batch).
-        /// 
+        ///
         /// Ejemplo de JSON:
         /// {
         ///   "Data": [
@@ -340,19 +335,19 @@ namespace GenReports.Controllers
         [ProducesResponseType(typeof(ApiResponse<string>), 400)]
         [ProducesResponseType(typeof(ApiResponse<string>), 500)]
         public async Task<IActionResult> GenerateConsolidatedReportWithSplit(
-            [FromBody] 
+            [FromBody]
             [SwaggerRequestBody(
                 Description = "Datos JSON para generar el reporte consolidado",
                 Required = true
             )]
             object dataSource,
-            [FromQuery] 
+            [FromQuery]
             [SwaggerParameter(
                 Description = "Tipo de reporte a generar",
                 Required = false
             )]
-            string reportType = "USUARIO",
-            [FromQuery] 
+            string reportType = "USUARIO_MASIVO",
+            [FromQuery]
             [SwaggerParameter(
                 Description = "Nombre del usuario que solicita el reporte",
                 Required = false
@@ -399,11 +394,11 @@ namespace GenReports.Controllers
                 if (cachedFile != null)
                 {
                     Console.WriteLine($"Archivo encontrado en caché: {cachedFile.OriginalFileName}");
-                    
+
                     // Generar URL de descarga
                     var requestBaseUrl = $"{Request.Scheme}://{Request.Host}";
                     var downloadUrl = _cacheService.GenerateDownloadUrl(cachedFile.DownloadToken, requestBaseUrl);
-                    
+
                     var cachedResponse = new ApiResponse<UFileDownload>
                     {
                         Data = new UFileDownload
@@ -439,14 +434,14 @@ namespace GenReports.Controllers
                 }
 
                 // Detectar tipo de contenido basado en la extensión
-                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) 
-                    ? "application/zip" 
+                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    ? "application/zip"
                     : "application/pdf";
 
                 // Almacenar en caché temporal con hash personalizado
                 var tempFileInfo = await _cacheService.StoreFileAsync(
-                    fileOutput.BytesArchivo, 
-                    fileOutput.NombreArchivo, 
+                    fileOutput.BytesArchivo,
+                    fileOutput.NombreArchivo,
                     contentType,
                     inputHash
                 );

@@ -1,7 +1,6 @@
 using GenReports.Models;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 
 namespace GenReports.Services
@@ -167,7 +166,7 @@ namespace GenReports.Services
                         {
                             var fileInfo = new FileInfo(expiredFile.FilePath);
                             var fileSize = fileInfo.Length;
-                            
+
                             File.Delete(expiredFile.FilePath);
                             result.FilesDeleted++;
                             result.SpaceFreedBytes += fileSize;

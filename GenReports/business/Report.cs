@@ -1,10 +1,11 @@
+using GenReports.Models;
+using Microsoft.Extensions.Options;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
+using System.IO.Compression;
 using System.Text.Json;
 using Telerik.Reporting;
 using Telerik.Reporting.Processing;
-using ICSharpCode.SharpZipLib.Zip;
-using System.IO.Compression;
-using Microsoft.Extensions.Options;
-using GenReports.Models;
 
 namespace GenReports.business
 {
@@ -20,8 +21,6 @@ namespace GenReports.business
             _directorioTemporal = _reportsConfig.TemporaryDirectory;
             _urlBaseReportes = urlBaseReportes;
         }
-
-
 
         /// <summary>
         /// Método principal que ejecuta un reporte de acuerdo al tipo del mismo
@@ -96,7 +95,7 @@ namespace GenReports.business
 
                 // Convertir la data a una lista de objetos
                 var dataList = new List<object>();
-                
+
                 if (dataElement.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var item in dataElement.EnumerateArray())
@@ -148,24 +147,24 @@ namespace GenReports.business
                 if (!File.Exists(plantillaPath))
                 {
                     // Listar archivos disponibles para debugging
-                    var availableFiles = Directory.Exists(_reportsConfig.BasePath) 
+                    var availableFiles = Directory.Exists(_reportsConfig.BasePath)
                         ? Directory.GetFiles(_reportsConfig.BasePath, "*.trdp")
                         : new string[0];
-                    
+
                     var availableList = string.Join(", ", availableFiles.Select(Path.GetFileName));
                     throw new FileNotFoundException($"No se encuentra el archivo de plantilla del reporte: {plantillaPath}. Archivos disponibles: {availableList}");
                 }
 
                 // Crear el procesador de reportes
                 var telerikReportProcessor = new ReportProcessor();
-                
+
                 // Configurar información del dispositivo
                 var deviceInfo = new System.Collections.Hashtable();
-                
+
                 // Cargar la definición del reporte desde el archivo .trdp
                 var reportPackager = new ReportPackager();
                 Telerik.Reporting.Report reportDefinition;
-                
+
                 try
                 {
                     using (var fs = new FileStream(plantillaPath, FileMode.Open, FileAccess.Read))
@@ -173,7 +172,7 @@ namespace GenReports.business
                         // Intentar cargar el reporte con manejo específico para problemas de serialización
                         var document = reportPackager.UnpackageDocument(fs);
                         reportDefinition = document as Telerik.Reporting.Report;
-                        
+
                         if (reportDefinition == null)
                         {
                             throw new InvalidOperationException($"El archivo {plantillaPath} no contiene un reporte válido de Telerik");
@@ -186,7 +185,7 @@ namespace GenReports.business
                     Console.WriteLine($"Error cargando el reporte desde {plantillaPath}: {ex.Message}");
                     Console.WriteLine($"Tipo de excepción: {ex.GetType().Name}");
                     Console.WriteLine($"Stack trace: {ex.StackTrace}");
-                    
+
                     // Si es un error de serialización, proporcionar más información
                     if (ex.Message.Contains("ReportSerializable") || ex.Message.Contains("serialization"))
                     {
@@ -195,7 +194,7 @@ namespace GenReports.business
                             $"y la versión actual, o problemas de compatibilidad entre Windows/Linux. " +
                             $"Archivo: {plantillaPath}. Error original: {ex.Message}", ex);
                     }
-                    
+
                     throw new InvalidOperationException($"Error cargando la plantilla del reporte: {ex.Message}", ex);
                 }
 
@@ -214,7 +213,7 @@ namespace GenReports.business
                 // Renderizar el reporte
                 var formatoSalida = "PDF";
                 RenderingResult resultado;
-                
+
                 try
                 {
                     Console.WriteLine("Iniciando procesamiento del reporte...");
@@ -233,7 +232,7 @@ namespace GenReports.business
                 {
                     var errores = string.Join("; ", resultado.Errors.Select(e => e.Message));
                     Console.WriteLine($"El reporte tiene errores: {errores}");
-                    
+
                     if (resultado.DocumentBytes == null)
                     {
                         throw new InvalidOperationException($"Error generando el reporte: {errores}");
@@ -261,21 +260,21 @@ namespace GenReports.business
             {
                 // Buscar todos los objetos JsonDataSource en el reporte
                 var jsonDataSources = FindJsonDataSources(report);
-                
+
                 if (jsonDataSources.Count == 0)
                 {
                     Console.WriteLine("No se encontraron JsonDataSource en el reporte. Se intentará agregar uno automáticamente.");
-                    
+
                     // Crear un JsonDataSource básico si no existe
                     var dataSource = new Telerik.Reporting.JsonDataSource();
-                    
+
                     // Convertir los datos en un JSON que represente un array
                     var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
                     var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
-                    
+
                     // Asignar el contenido JSON como Source (API correcta)
                     dataSource.Source = jsonArray;
-                    
+
                     // Asignar el JsonDataSource al reporte
                     report.DataSource = dataSource;
                     Console.WriteLine("Se agregó automáticamente un JsonDataSource al reporte");
@@ -283,7 +282,7 @@ namespace GenReports.business
                 else
                 {
                     Console.WriteLine($"Se encontraron {jsonDataSources.Count} JsonDataSource en el reporte. Configurando...");
-                    
+
                     // Configurar cada JsonDataSource con los datos proporcionados
                     foreach (var dataSource in jsonDataSources)
                     {
@@ -376,7 +375,7 @@ namespace GenReports.business
             try
             {
                 Console.WriteLine($"Inicio de ExecuteBatchReportsCompressed: {DateTime.Now}");
-                
+
                 // Validar que el JSON no esté vacío
                 if (string.IsNullOrWhiteSpace(reportJson))
                 {
@@ -403,7 +402,7 @@ namespace GenReports.business
                         try
                         {
                             Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count}");
-                            
+
                             // Crear un JSON con un solo registro
                             var singleRecordData = new List<object> { reportData[i] };
                             var singleRecordJson = JsonSerializer.Serialize(new { Data = singleRecordData });
@@ -415,12 +414,12 @@ namespace GenReports.business
                             {
                                 // Crear nombre único para el archivo dentro del ZIP
                                 var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                                
+
                                 // Agregar el archivo al ZIP
                                 var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.Optimal);
                                 using var entryStream = zipEntry.Open();
                                 await entryStream.WriteAsync(reporteIndividual.BytesArchivo, 0, reporteIndividual.BytesArchivo.Length);
-                                
+
                                 Console.WriteLine($"Archivo {nombreArchivo} agregado al ZIP");
                             }
                             else
@@ -438,7 +437,7 @@ namespace GenReports.business
 
                 // Crear el archivo de salida comprimido con nombre simple (sin ruta completa)
                 var nombreArchivoZip = $"Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
-                
+
                 var archivoComprimido = new ArchivoResult
                 {
                     NombreArchivo = nombreArchivoZip,
@@ -448,7 +447,7 @@ namespace GenReports.business
                 };
 
                 Console.WriteLine($"Archivo ZIP generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
-                
+
                 return archivoComprimido;
             }
             catch (Exception ex)
@@ -467,29 +466,211 @@ namespace GenReports.business
         /// <returns>ArchivoResult con el archivo ZIP que contiene los PDFs divididos</returns>
         public async Task<ArchivoResult> ExecuteConsolidatedReportWithSplit(string jsonString, string reportType, string userName = "SYSTEM")
         {
-            // En lugar de dividir un PDF consolidado (lo que requería Telerik.Documents.Fixed),
-            // utilizamos el flujo ya existente de generación individual por registro y compresión.
-            return await ExecuteBatchReportsCompressed(jsonString, reportType, userName);
+            try
+            {
+                Console.WriteLine($"Inicio de ExecuteConsolidatedReportWithSplit: {DateTime.Now}");
+
+                // Validar que el JSON no esté vacío
+                if (string.IsNullOrWhiteSpace(jsonString))
+                {
+                    throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
+                }
+
+                // Parsear el JSON para extraer la data
+                var reportData = ExtractDataFromJson(jsonString);
+
+                if (reportData == null || !reportData.Any())
+                {
+                    throw new InvalidOperationException("No se encontraron datos en el JSON del reporte");
+                }
+
+                Console.WriteLine($"Generando reporte consolidado con {reportData.Count} registros");
+
+                // PASO 1: Generar un PDF consolidado reutilizando GenerateConsolidatedReport
+                var reporteConsolidado = GenerateConsolidatedReport(jsonString, reportType, userName);
+
+                if (reporteConsolidado?.BytesArchivo == null)
+                {
+                    throw new InvalidOperationException("No se pudo generar el reporte consolidado");
+                }
+
+                Console.WriteLine($"PDF consolidado generado exitosamente. Tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
+
+                // Verificación: si el consolidado no generó una página por registro, hacer fallback a batch
+                try
+                {
+                    using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
+                    using var verifyDoc = PdfReader.Open(verifyStream, PdfDocumentOpenMode.ReadOnly);
+                    var consolidatedPages = verifyDoc.PageCount;
+                    if (consolidatedPages < 2 || consolidatedPages != reportData.Count)
+                    {
+                        Console.WriteLine($"Advertencia: El PDF consolidado tiene {consolidatedPages} páginas para {reportData.Count} registros. Ejecutando fallback a generación batch.");
+                        return await ExecuteBatchReportsCompressed(jsonString, reportType, userName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"No se pudo verificar el número de páginas del consolidado: {ex.Message}. Continuando con split por páginas.");
+                }
+
+                // PASO 2: Dividir el PDF consolidado en archivos individuales
+                var zipBytes = await SplitPdfIntoIndividualFiles(reporteConsolidado.BytesArchivo, reportData.Count, userName);
+
+                // Crear el archivo de salida comprimido
+                var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+
+                var archivoComprimido = new ArchivoResult
+                {
+                    NombreArchivo = nombreArchivoZip,
+                    BytesArchivo = zipBytes,
+                    Usuario = userName,
+                    FechaGeneracion = DateTime.Now
+                };
+
+                Console.WriteLine($"Archivo ZIP con split generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
+
+                return archivoComprimido;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error en ExecuteConsolidatedReportWithSplit: {ex.Message}");
+                throw;
+            }
         }
 
         /// <summary>
-        /// Fallback simple que empaqueta el PDF consolidado en un ZIP sin dividir.
-        /// Se mantiene para compatibilidad pero no se usa por defecto.
+        /// Divide un PDF consolidado en archivos individuales por página y los comprime en un ZIP
         /// </summary>
+        /// <param name="consolidatedPdfBytes">Bytes del PDF consolidado</param>
+        /// <param name="recordCount">Número de registros (para validación)</param>
+        /// <param name="userName">Nombre del usuario</param>
+        /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
         private async Task<byte[]> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
         {
-            using var zipStream = new MemoryStream();
-            using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
+            try
             {
-                var entryName = $"ReporteConsolidado_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-                var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.Optimal);
-                await using var entryStream = zipEntry.Open();
-                await entryStream.WriteAsync(consolidatedPdfBytes, 0, consolidatedPdfBytes.Length);
+                Console.WriteLine($"Iniciando split del PDF consolidado. Tamaño: {consolidatedPdfBytes.Length} bytes");
+
+                using var zipStream = new MemoryStream();
+                using (var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Create, true))
+                {
+                    // Crear un stream del PDF consolidado
+                    using var pdfStream = new MemoryStream(consolidatedPdfBytes);
+                    using var inputDocument = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Import);
+                    int totalPages = inputDocument.PageCount;
+                    Console.WriteLine($"PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
+
+                    if (totalPages == 1 && recordCount > 1)
+                    {
+                        Console.WriteLine("Advertencia: El PDF consolidado tiene 1 sola página pero hay múltiples registros. Verifique su plantilla .trdp para que cada registro genere una página (por ejemplo, usando un List/Group con PageBreak).");
+                    }
+
+                    // Dividir cada página en un archivo individual
+                    for (int pageNumber = 0; pageNumber < totalPages; pageNumber++)
+                    {
+                        try
+                        {
+                            Console.WriteLine($"Procesando página {pageNumber + 1} de {totalPages}");
+
+                            // Crear un nuevo PDF con solo esta página
+                            using var outputStream = new MemoryStream();
+                            var outputDocument = new PdfDocument();
+
+                            // Copiar la página específica al nuevo documento
+                            var page = inputDocument.Pages[pageNumber];
+                            outputDocument.AddPage(page);
+
+                            // Guardar el documento de salida
+                            outputDocument.Save(outputStream);
+                            outputDocument.Close();
+
+                            // Obtener los bytes del PDF individual
+                            var individualPdfBytes = outputStream.ToArray();
+
+                            if (individualPdfBytes.Length > 0)
+                            {
+                                // Crear nombre único para el archivo dentro del ZIP
+                                var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+
+                                // Agregar el archivo al ZIP
+                                var zipEntry = zipArchive.CreateEntry(nombreArchivo, CompressionLevel.Optimal);
+                                using var entryStream = zipEntry.Open();
+                                await entryStream.WriteAsync(individualPdfBytes, 0, individualPdfBytes.Length);
+
+                                Console.WriteLine($"Página {pageNumber + 1} guardada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"Advertencia: La página {pageNumber + 1} resultó en un PDF vacío");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error procesando página {pageNumber + 1}: {ex.Message}");
+                            // Continuar con la siguiente página en caso de error
+                        }
+                    }
+
+                    Console.WriteLine($"Split completado. Total de páginas procesadas: {totalPages}");
+                }
+
+                var zipBytes = zipStream.ToArray();
+                Console.WriteLine($"ZIP generado con tamaño: {zipBytes.Length} bytes");
+                return zipBytes;
             }
-            return zipStream.ToArray();
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error en SplitPdfIntoIndividualFiles: {ex.Message}");
+                Console.WriteLine($"StackTrace: {ex.StackTrace}");
+
+                // En caso de error, crear un ZIP con el PDF original como fallback
+                Console.WriteLine("Creando fallback con PDF consolidado original...");
+                using var fallbackZipStream = new MemoryStream();
+                using (var zipArchive = new ZipArchive(fallbackZipStream, ZipArchiveMode.Create, true))
+                {
+                    var entryName = $"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                    var zipEntry = zipArchive.CreateEntry(entryName, CompressionLevel.Optimal);
+                    await using var entryStream = zipEntry.Open();
+                    await entryStream.WriteAsync(consolidatedPdfBytes, 0, consolidatedPdfBytes.Length);
+                }
+                return fallbackZipStream.ToArray();
+            }
         }
 
         // Método GuardarAsync eliminado de Report; use ArchivoResult.GuardarAsync
+
+        /// <summary>
+        /// Genera un reporte PDF consolidado (sin comprimir) a partir de un JSON con múltiples registros.
+        /// </summary>
+        /// <param name="jsonString">JSON que contiene una propiedad "Data" con los registros</param>
+        /// <param name="reportType">Tipo de reporte</param>
+        /// <param name="userName">Usuario que genera el reporte</param>
+        /// <returns>ArchivoResult con los bytes del PDF consolidado</returns>
+        public ArchivoResult GenerateConsolidatedReport(string jsonString, string reportType, string userName = "SYSTEM")
+        {
+            Console.WriteLine($"Inicio de GenerateConsolidatedReport: {DateTime.Now}");
+
+            if (string.IsNullOrWhiteSpace(jsonString))
+            {
+                throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
+            }
+
+            var reportData = ExtractDataFromJson(jsonString);
+            if (reportData == null || !reportData.Any())
+            {
+                throw new InvalidOperationException("No se encontraron datos en el JSON del reporte");
+            }
+
+            Console.WriteLine($"Generando PDF consolidado con {reportData.Count} registros para el reporte {reportType}");
+            var consolidado = GenerateTelerik(reportData, reportType, userName);
+            if (consolidado?.BytesArchivo == null || consolidado.BytesArchivo.Length == 0)
+            {
+                throw new InvalidOperationException("No se pudo generar el PDF consolidado");
+            }
+
+            Console.WriteLine($"PDF consolidado generado. Tamaño: {consolidado.BytesArchivo.Length} bytes");
+            return consolidado;
+        }
     }
 
     /// <summary>
@@ -511,7 +692,7 @@ namespace GenReports.business
             var extension = Path.GetExtension(NombreArchivo);
             var nombreSinExtension = Path.GetFileNameWithoutExtension(NombreArchivo);
             var directorio = Path.GetDirectoryName(NombreArchivo) ?? "";
-            
+
             var nombreUnico = $"{nombreSinExtension}_{usuario}_{Guid.NewGuid():N}{extension}";
             NombreArchivo = Path.Combine(directorio, nombreUnico);
         }

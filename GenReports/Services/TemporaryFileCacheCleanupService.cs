@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Options;
 using GenReports.Models;
+using Microsoft.Extensions.Options;
 
 namespace GenReports.Services
 {
@@ -31,9 +31,9 @@ namespace GenReports.Services
                 try
                 {
                     _logger.LogInformation("Iniciando limpieza de archivos expirados...");
-                    
+
                     var cleanupResult = await _cacheService.CleanupExpiredFilesAsync();
-                    
+
                     if (cleanupResult.FilesDeleted > 0)
                     {
                         _logger.LogInformation(
@@ -49,7 +49,7 @@ namespace GenReports.Services
                     // Esperar el intervalo configurado antes de la próxima limpieza
                     var delayMinutes = _options.CleanupIntervalMinutes;
                     _logger.LogDebug("Próxima limpieza en {DelayMinutes} minutos", delayMinutes);
-                    
+
                     await Task.Delay(TimeSpan.FromMinutes(delayMinutes), stoppingToken);
                 }
                 catch (OperationCanceledException)
@@ -61,7 +61,7 @@ namespace GenReports.Services
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error durante la limpieza de archivos expirados");
-                    
+
                     // En caso de error, esperar un tiempo menor antes de reintentar
                     await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
                 }

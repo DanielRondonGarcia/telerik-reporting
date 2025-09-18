@@ -1,7 +1,5 @@
 using GenReports.Models;
 using GenReports.Services;
-using GenReports.business;
-using Telerik.Reporting.Processing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,16 +27,16 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo 
-    { 
-        Title = "GenReports API", 
+    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "GenReports API",
         Version = "v1",
         Description = "API para generación de reportes usando Telerik"
     });
-    
+
     // Habilitar anotaciones de Swagger
     c.EnableAnnotations();
-    
+
     // Incluir comentarios XML
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
