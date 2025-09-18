@@ -57,3 +57,6 @@ nunit-*.xml
 /GenReports/temp_downloads
 /GenReports/publish
 GenReports/GenReports.csproj.user
+
+# Telerik NuGet configuration (contains sensitive package source URLs)
+GenReports/nuget.config
