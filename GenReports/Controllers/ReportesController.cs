@@ -269,9 +269,19 @@ namespace GenReports.Controllers
                 using var document = JsonDocument.Parse(jsonString);
                 var root = document.RootElement;
 
-                // Verificar que existe la propiedad "Data"
-                if (!root.TryGetProperty("Data", out var dataElement))
+                // Intentar obtener la propiedad "Data" sin sensibilidad a mayúsculas/minúsculas
+                JsonElement dataElement;
+                if (!TryGetPropertyCaseInsensitive(root, "Data", out dataElement))
                 {
+                    // Si no existe la propiedad Data, aceptar también cuando la raíz es un arreglo
+                    if (root.ValueKind == JsonValueKind.Array)
+                    {
+                        var rootArrayLength = root.GetArrayLength();
+                        Console.WriteLine($"Número de registros detectados (raíz como arreglo): {rootArrayLength}");
+                        return rootArrayLength > 1;
+                    }
+
+                    // Si no es arreglo, considerarlo como un solo registro
                     return false;
                 }
 
@@ -365,6 +375,12 @@ namespace GenReports.Controllers
                 // Convertir el objeto a JSON string
                 var jsonString = JsonSerializer.Serialize(dataSource);
                 Console.WriteLine($"JSON recibido: {jsonString}");
+
+                // Validar que el JSON no esté vacío
+                if (string.IsNullOrWhiteSpace(jsonString))
+                {
+                    throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
+                }
 
                 // Verificar que hay múltiples registros
                 var isMultipleRecords = IsMultipleRecords(jsonString);
@@ -486,6 +502,24 @@ namespace GenReports.Controllers
 
                 return StatusCode(500, errorResponse);
             }
+        }
+
+        // Helper local para leer propiedades de forma case-insensitive
+        private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = prop.Value;
+                        return true;
+                    }
+                }
+            }
+            value = default;
+            return false;
         }
     }
 }

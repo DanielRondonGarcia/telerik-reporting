@@ -4,6 +4,8 @@ using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Telerik.Reporting;
 using Telerik.Reporting.Processing;
 using System.Collections.Concurrent;
@@ -159,6 +161,33 @@ namespace GenReports.business
         }
 
         /// <summary>
+        /// Genera el reporte usando Telerik Reporting con timeout
+        /// </summary>
+        /// <param name="reportData">Datos del reporte</param>
+        /// <param name="reportType">Tipo de reporte</param>
+        /// <param name="userName">Nombre del usuario</param>
+        /// <param name="timeout">Tiempo máximo de espera</param>
+        /// <returns>Archivo generado</returns>
+        private ArchivoResult GenerateTelerikWithTimeout(List<object> reportData, string reportType, string userName, TimeSpan timeout)
+        {
+            var cancellationTokenSource = new CancellationTokenSource(timeout);
+            
+            try
+            {
+                var task = Task.Run(() => GenerateTelerik(reportData, reportType, userName), cancellationTokenSource.Token);
+                return task.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"La generación del reporte excedió el tiempo límite de {timeout.TotalMinutes} minutos");
+            }
+            finally
+            {
+                cancellationTokenSource?.Dispose();
+            }
+        }
+
+        /// <summary>
         /// Genera el reporte usando Telerik Reporting
         /// </summary>
         /// <param name="reportData">Datos del reporte</param>
@@ -189,55 +218,61 @@ namespace GenReports.business
 
                 // Crear el procesador de reportes
                 var telerikReportProcessor = new ReportProcessor();
+                if (telerikReportProcessor == null)
+                {
+                    throw new InvalidOperationException("No se pudo crear el procesador de reportes de Telerik");
+                }
 
                 // Configurar información del dispositivo
                 var deviceInfo = new System.Collections.Hashtable();
 
                 // Cargar la definición del reporte desde el archivo .trdp
                 var reportPackager = new ReportPackager();
+                if (reportPackager == null)
+                {
+                    throw new InvalidOperationException("No se pudo crear el empaquetador de reportes");
+                }
+
                 Telerik.Reporting.Report reportDefinition;
 
-                try
+                // Simplificado: cargar directamente y permitir que la excepción se propague al catch externo si algo falla
+                using (var fs = new FileStream(plantillaPath, FileMode.Open, FileAccess.Read))
                 {
-                    using (var fs = new FileStream(plantillaPath, FileMode.Open, FileAccess.Read))
-                    {
-                        // Intentar cargar el reporte con manejo específico para problemas de serialización
-                        var document = reportPackager.UnpackageDocument(fs);
-                        reportDefinition = document as Telerik.Reporting.Report;
-
-                        if (reportDefinition == null)
-                        {
-                            throw new InvalidOperationException($"El archivo {plantillaPath} no contiene un reporte válido de Telerik");
-                        }
-                    }
-                    Console.WriteLine($"Reporte cargado exitosamente desde: {plantillaPath}");
+                    var document = reportPackager.UnpackageDocument(fs);
+                    reportDefinition = document as Telerik.Reporting.Report
+                        ?? throw new InvalidOperationException($"El archivo {plantillaPath} no contiene un reporte válido de Telerik");
                 }
-                catch (Exception ex)
+                Console.WriteLine($"Reporte cargado exitosamente desde: {plantillaPath}");
+
+                // Validar que reportDefinition no sea null
+                if (reportDefinition == null)
                 {
-                    Console.WriteLine($"Error cargando el reporte desde {plantillaPath}: {ex.Message}");
-                    Console.WriteLine($"Tipo de excepción: {ex.GetType().Name}");
-                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                    throw new InvalidOperationException("La definición del reporte es nula después de la carga");
+                }
 
-                    // Si es un error de serialización, proporcionar más información
-                    if (ex.Message.Contains("ReportSerializable") || ex.Message.Contains("serialization"))
-                    {
-                        throw new InvalidOperationException($"Error de serialización al cargar la plantilla del reporte. " +
-                            $"Esto puede deberse a incompatibilidad entre la versión de Telerik usada para crear el archivo .trdp " +
-                            $"y la versión actual, o problemas de compatibilidad entre Windows/Linux. " +
-                            $"Archivo: {plantillaPath}. Error original: {ex.Message}", ex);
-                    }
-
-                    throw new InvalidOperationException($"Error cargando la plantilla del reporte: {ex.Message}", ex);
+                // Validar que reportData no sea null o vacío
+                if (reportData == null || !reportData.Any())
+                {
+                    throw new InvalidOperationException("Los datos del reporte son nulos o están vacíos");
                 }
 
                 // Configurar el origen de datos
                 ConfigureDataSource(reportDefinition, reportData);
 
-                // Crear el InstanceReportSource
-                var instanceReportSource = new InstanceReportSource
+                // Crear el InstanceReportSource con validaciones adicionales
+                var instanceReportSource = new InstanceReportSource();
+                if (instanceReportSource == null)
                 {
-                    ReportDocument = reportDefinition
-                };
+                    throw new InvalidOperationException("No se pudo crear la instancia del reporte");
+                }
+
+                instanceReportSource.ReportDocument = reportDefinition;
+
+                // Validar que ReportDocument se asignó correctamente
+                if (instanceReportSource.ReportDocument == null)
+                {
+                    throw new InvalidOperationException("No se pudo asignar el documento del reporte a la instancia");
+                }
 
                 // Agregar parámetros al reporte
                 AddReportParameters(instanceReportSource, reportType, userName);
@@ -249,7 +284,31 @@ namespace GenReports.business
                 try
                 {
                     Console.WriteLine("Iniciando procesamiento del reporte...");
+                    
+                    // Validaciones finales antes del renderizado
+                    if (string.IsNullOrEmpty(formatoSalida))
+                    {
+                        throw new InvalidOperationException("El formato de salida no puede ser nulo o vacío");
+                    }
+
+                    if (instanceReportSource == null)
+                    {
+                        throw new InvalidOperationException("La instancia del reporte es nula antes del renderizado");
+                    }
+
+                    if (deviceInfo == null)
+                    {
+                        throw new InvalidOperationException("La información del dispositivo es nula");
+                    }
+
                     resultado = telerikReportProcessor.RenderReport(formatoSalida, instanceReportSource, deviceInfo);
+                    
+                    // Validar que el resultado no sea null
+                    if (resultado == null)
+                    {
+                        throw new InvalidOperationException("El resultado del renderizado es nulo");
+                    }
+
                     Console.WriteLine($"Reporte procesado. Tiene errores: {resultado.HasErrors}");
                 }
                 catch (Exception ex)
@@ -290,34 +349,73 @@ namespace GenReports.business
         {
             try
             {
+                // Validaciones iniciales
+                if (report == null)
+                {
+                    throw new ArgumentNullException(nameof(report), "El reporte no puede ser nulo");
+                }
+
+                if (reportData == null)
+                {
+                    throw new ArgumentNullException(nameof(reportData), "Los datos del reporte no pueden ser nulos");
+                }
+
+                if (!reportData.Any())
+                {
+                    throw new ArgumentException("Los datos del reporte no pueden estar vacíos", nameof(reportData));
+                }
+
+                Console.WriteLine($"Configurando origen de datos para {reportData.Count} registros");
+
                 var jsonDataSources = FindJsonDataSources(report);
 
                 if (jsonDataSources.Count == 0)
                 {
-                    Console.WriteLine("No se encontraron JsonDataSource en el reporte. Se intentará agregar uno automáticamente.");
+                    // No hay JsonDataSource definidos en la plantilla: usar ObjectDataSource para evitar re-serializar el JSON
+                    var objectDataSource = new Telerik.Reporting.ObjectDataSource
+                    {
+                        DataSource = reportData
+                    };
 
-                    var dataSource = new Telerik.Reporting.JsonDataSource();
-                    var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
-                    var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
+                    if (objectDataSource == null)
+                    {
+                        throw new InvalidOperationException("No se pudo crear el ObjectDataSource");
+                    }
 
-                    dataSource.Source = jsonArray;
-                    // Forzar DataSelector = "$" si la propiedad existe en esta versión
-                    TrySetProperty(dataSource, "DataSelector", "$");
-
-                    report.DataSource = dataSource;
-                    Console.WriteLine($"Se agregó automáticamente un JsonDataSource al reporte (registros: {reportData.Count})");
+                    report.DataSource = objectDataSource;
+                    Console.WriteLine($"ObjectDataSource configurado con {reportData.Count} registros (sin re-serialización)");
                 }
                 else
                 {
                     Console.WriteLine($"Se encontraron {jsonDataSources.Count} JsonDataSource en el reporte. Configurando...");
 
+                    // Serializar una sola vez y reutilizar según DataSelector existente
+                    var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
+                    var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);               // Ej: [ {..}, {..} ]
+                    var jsonWrapped = JsonSerializer.Serialize(new { Data = reportData }, jsonOptions); // Ej: { "Data": [ {..}, {..} ] }
+
                     foreach (var dataSource in jsonDataSources)
                     {
-                        var jsonOptions = new JsonSerializerOptions { WriteIndented = false };
-                        var jsonArray = JsonSerializer.Serialize(reportData, jsonOptions);
-                        dataSource.Source = jsonArray;
-                        // Forzar DataSelector = "$" si la propiedad existe en esta versión
-                        TrySetProperty(dataSource, "DataSelector", "$");
+                        // Leer el DataSelector actual (si existe) para no romper plantillas que esperan $.Data u otro path
+                        var selector = TryGetStringProperty(dataSource, "DataSelector");
+                        var needsWrapper = !string.IsNullOrWhiteSpace(selector) && selector.IndexOf("Data", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                        // Si la plantilla hace referencia a $.Data, debemos envolver el arreglo en un objeto con la propiedad Data
+                        if (needsWrapper)
+                        {
+                            TrySetProperty(dataSource, "Source", jsonWrapped);
+                            Console.WriteLine("JsonDataSource.Source configurado con objeto envuelto { Data = [...] } por DataSelector='" + selector + "'");
+                        }
+                        else
+                        {
+                            // Caso general: la plantilla apunta a la raíz ($) -> enviar arreglo directo
+                            TrySetProperty(dataSource, "Source", jsonArray);
+                            // Solo establecer DataSelector cuando esté vacío o nulo, evitando sobreescribir configuraciones de la plantilla
+                            if (string.IsNullOrWhiteSpace(selector))
+                            {
+                                TrySetProperty(dataSource, "DataSelector", "$");
+                            }
+                        }
                     }
                     Console.WriteLine($"JsonDataSource configurado con {reportData.Count} registros");
                 }
@@ -344,6 +442,24 @@ namespace GenReports.business
             {
                 Console.WriteLine($"[DataSource] No fue posible establecer {propertyName}: {ex.Message}");
             }
+        }
+
+        private static string? TryGetStringProperty(object instance, string propertyName)
+        {
+            try
+            {
+                var prop = instance.GetType().GetProperty(propertyName);
+                if (prop != null && prop.CanRead)
+                {
+                    var val = prop.GetValue(instance);
+                    return val?.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DataSource] No fue posible leer {propertyName}: {ex.Message}");
+            }
+            return null;
         }
 
         // Helper: Busca de forma recursiva todos los JsonDataSource en el reporte y en los data items anidados
@@ -401,12 +517,43 @@ namespace GenReports.business
         /// <param name="userName">Nombre del usuario</param>
         private void AddReportParameters(InstanceReportSource instanceReportSource, string reportType, string userName)
         {
-            instanceReportSource.Parameters.Add("nombreReporte", reportType);
-            instanceReportSource.Parameters.Add("versionReporte", "v1.0");
-            instanceReportSource.Parameters.Add("userSistema", userName);
-            instanceReportSource.Parameters.Add("userNombre", userName);
-            instanceReportSource.Parameters.Add("tituloReporte", $"Reporte {reportType}");
-            instanceReportSource.Parameters.Add("fechaGeneracion", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+            // Validaciones de entrada
+            if (instanceReportSource == null)
+            {
+                throw new ArgumentNullException(nameof(instanceReportSource), "La instancia del reporte no puede ser nula");
+            }
+
+            if (instanceReportSource.Parameters == null)
+            {
+                throw new InvalidOperationException("La colección de parámetros del reporte es nula");
+            }
+
+            if (string.IsNullOrWhiteSpace(reportType))
+            {
+                reportType = "DESCONOCIDO";
+            }
+
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                userName = "SYSTEM";
+            }
+
+            try
+            {
+                instanceReportSource.Parameters.Add("nombreReporte", reportType);
+                instanceReportSource.Parameters.Add("versionReporte", "v1.0");
+                instanceReportSource.Parameters.Add("userSistema", userName);
+                instanceReportSource.Parameters.Add("userNombre", userName);
+                instanceReportSource.Parameters.Add("tituloReporte", $"Reporte {reportType}");
+                instanceReportSource.Parameters.Add("fechaGeneracion", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"));
+                
+                Console.WriteLine($"Parámetros agregados exitosamente al reporte: {reportType}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error agregando parámetros al reporte: {ex.Message}");
+                throw new InvalidOperationException($"Error configurando parámetros del reporte: {ex.Message}", ex);
+            }
         }
 
         /// <summary>
@@ -439,37 +586,83 @@ namespace GenReports.business
                 Console.WriteLine($"Procesando {reportData.Count} registros para reportes individuales");
 
                 var entries = new ConcurrentBag<ArchiveEntry>();
-                // Generar un reporte individual para cada registro
+                // Generar un reporte individual para cada registro con manejo mejorado de errores
+                var erroresEncontrados = new List<string>();
+                var reportesExitosos = 0;
+
                 for (int i = 0; i < reportData.Count; i++)
                 {
-                    try
+                    var maxReintentos = 3;
+                    var reintentoActual = 0;
+                    var reporteGenerado = false;
+
+                    while (reintentoActual < maxReintentos && !reporteGenerado)
                     {
-                        Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count}");
-
-                        var singleRecordData = new List<object> { reportData[i] };
-
-                        // Generar el reporte individual
-                        var reporteIndividual = GenerateTelerik(singleRecordData, reportType, userName);
-
-                        if (reporteIndividual?.BytesArchivo != null)
+                        try
                         {
-                            // Crear nombre único para el archivo dentro del contenedor
-                            var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                            Console.WriteLine($"Generando reporte {i + 1} de {reportData.Count} (intento {reintentoActual + 1})");
 
-                            // Agregar a la lista de entradas para compresión
-                            entries.Add(new ArchiveEntry(nombreArchivo, reporteIndividual.BytesArchivo));
-                            Console.WriteLine($"Archivo {nombreArchivo} preparado para compresión");
+                            // Validar que el registro no sea null
+                            if (reportData[i] == null)
+                            {
+                                throw new InvalidOperationException($"El registro {i + 1} es nulo");
+                            }
+
+                            var singleRecordData = new List<object> { reportData[i] };
+
+                            // Generar el reporte individual con timeout
+                            var reporteIndividual = GenerateTelerikWithTimeout(singleRecordData, reportType, userName, TimeSpan.FromMinutes(5));
+
+                            if (reporteIndividual?.BytesArchivo != null && reporteIndividual.BytesArchivo.Length > 0)
+                            {
+                                // Crear nombre único para el archivo dentro del contenedor
+                                var nombreArchivo = $"{reportType}_Registro_{i + 1:D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+
+                                // Agregar a la lista de entradas para compresión
+                                entries.Add(new ArchiveEntry(nombreArchivo, reporteIndividual.BytesArchivo));
+                                Console.WriteLine($"Archivo {nombreArchivo} preparado para compresión (tamaño: {reporteIndividual.BytesArchivo.Length} bytes)");
+                                reporteGenerado = true;
+                                reportesExitosos++;
+                            }
+                            else
+                            {
+                                throw new InvalidOperationException($"El reporte generado para el registro {i + 1} está vacío o es nulo");
+                            }
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            Console.WriteLine($"Error: No se pudo generar el reporte para el registro {i + 1}");
+                            reintentoActual++;
+                            var mensajeError = $"Error generando reporte individual {i + 1} (intento {reintentoActual}): {ex.Message}";
+                            Console.WriteLine(mensajeError);
+
+                            if (reintentoActual >= maxReintentos)
+                            {
+                                erroresEncontrados.Add($"Registro {i + 1}: {ex.Message}");
+                                Console.WriteLine($"Se agotaron los reintentos para el registro {i + 1}. Continuando con el siguiente.");
+                            }
+                            else
+                            {
+                                // Esperar un poco antes del siguiente reintento
+                                await Task.Delay(1000 * reintentoActual);
+                            }
                         }
                     }
-                    catch (Exception ex)
+                }
+
+                Console.WriteLine($"Procesamiento completado: {reportesExitosos} reportes exitosos de {reportData.Count} registros");
+
+                if (erroresEncontrados.Any())
+                {
+                    Console.WriteLine($"Se encontraron {erroresEncontrados.Count} errores:");
+                    foreach (var error in erroresEncontrados)
                     {
-                        Console.WriteLine($"Error generando reporte individual {i + 1}: {ex.Message}");
-                        // Continuar con el siguiente registro en caso de error
+                        Console.WriteLine($"  - {error}");
                     }
+                }
+
+                if (reportesExitosos == 0)
+                {
+                    throw new InvalidOperationException($"No se pudo generar ningún reporte. Errores: {string.Join("; ", erroresEncontrados)}");
                 }
 
                 var compressor = new ArchiveCompressor();
@@ -510,43 +703,23 @@ namespace GenReports.business
             {
                 Console.WriteLine($"Inicio de ExecuteConsolidatedReportWithSplit: {DateTime.Now}");
 
-                // Validar que el JSON no esté vacío
-                if (string.IsNullOrWhiteSpace(jsonString))
-                {
-                    throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
-                }
-
                 // Parsear el JSON para extraer la data
                 var reportData = ExtractDataFromJson(jsonString);
-
-                if (reportData == null || !reportData.Any())
-                {
-                    throw new InvalidOperationException("No se encontraron datos en el JSON del reporte");
-                }
 
                 Console.WriteLine($"Generando reporte consolidado con {reportData.Count} registros");
 
                 // PASO 1: Generar un PDF consolidado reutilizando GenerateConsolidatedReport
-                var reporteConsolidado = GenerateConsolidatedReport(jsonString, reportType, userName);
-
-                if (reporteConsolidado?.BytesArchivo == null)
-                {
-                    throw new InvalidOperationException("No se pudo generar el reporte consolidado");
-                }
+                var reporteConsolidado = GenerateConsolidatedReport(reportData, reportType, userName);
 
                 Console.WriteLine($"PDF consolidado generado exitosamente. Tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
 
-                // Verificación: si el consolidado no generó una página por registro, hacer fallback a batch
+                // Verificar el número de páginas del PDF consolidado para información
                 try
                 {
                     using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
                     using var verifyDoc = PdfReader.Open(verifyStream, PdfDocumentOpenMode.Import);
                     var consolidatedPages = verifyDoc.PageCount;
-                    if (consolidatedPages < 2 || consolidatedPages != reportData.Count)
-                    {
-                        Console.WriteLine($"Advertencia: El PDF consolidado tiene {consolidatedPages} páginas para {reportData.Count} registros. Ejecutando fallback a generación batch.");
-                        return await ExecuteBatchReportsCompressed(jsonString, reportType, userName);
-                    }
+                    Console.WriteLine($"PDF consolidado contiene {consolidatedPages} páginas para {reportData.Count} registros.");
                 }
                 catch (Exception ex)
                 {
@@ -673,26 +846,15 @@ namespace GenReports.business
         // Método GuardarAsync eliminado de Report; use ArchivoResult.GuardarAsync
 
         /// <summary>
-        /// Genera un reporte PDF consolidado (sin comprimir) a partir de un JSON con múltiples registros.
+        /// Genera un reporte PDF consolidado a partir de un JSON con múltiples registros.
         /// </summary>
         /// <param name="jsonString">JSON que contiene una propiedad "Data" con los registros</param>
         /// <param name="reportType">Tipo de reporte</param>
         /// <param name="userName">Usuario que genera el reporte</param>
         /// <returns>ArchivoResult con los bytes del PDF consolidado</returns>
-        public ArchivoResult GenerateConsolidatedReport(string jsonString, string reportType, string userName = "SYSTEM")
+        public ArchivoResult GenerateConsolidatedReport(List<object> reportData, string reportType, string userName = "SYSTEM")
         {
             Console.WriteLine($"Inicio de GenerateConsolidatedReport: {DateTime.Now}");
-
-            if (string.IsNullOrWhiteSpace(jsonString))
-            {
-                throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
-            }
-
-            var reportData = ExtractDataFromJson(jsonString);
-            if (reportData == null || !reportData.Any())
-            {
-                throw new InvalidOperationException("No se encontraron datos en el JSON del reporte");
-            }
 
             Console.WriteLine($"Generando PDF consolidado con {reportData.Count} registros para el reporte {reportType}");
             var consolidado = GenerateTelerik(reportData, reportType, userName);
