@@ -25,24 +25,46 @@ builder.Services.AddHostedService<TemporaryFileCacheCleanupService>();
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
+builder.Services.AddSwaggerGen(options =>
 {
-    c.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
     {
-        Title = "GenReports API",
         Version = "v1",
-        Description = "API para generación de reportes usando Telerik"
+        Title = "GenReports API",
+        Description = "API para generación de reportes usando Telerik",
+        TermsOfService = new Uri("https://example.com/terms"),
+        Contact = new Microsoft.OpenApi.Models.OpenApiContact
+        {
+            Name = "GenReports Team",
+            Email = "support@genreports.com",
+            Url = new Uri("https://example.com/contact")
+        },
+        License = new Microsoft.OpenApi.Models.OpenApiLicense
+        {
+            Name = "MIT License",
+            Url = new Uri("https://example.com/license")
+        }
+    });
+
+    // Configurar esquemas de seguridad si es necesario
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme",
+        Name = "Authorization",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
     });
 
     // Habilitar anotaciones de Swagger
-    c.EnableAnnotations();
+    options.EnableAnnotations();
 
-    // Incluir comentarios XML
+    // Incluir comentarios XML si existe
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     if (File.Exists(xmlPath))
     {
-        c.IncludeXmlComments(xmlPath);
+        options.IncludeXmlComments(xmlPath);
     }
 });
 
