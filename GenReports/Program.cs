@@ -22,6 +22,10 @@ builder.Services.AddScoped<GenReports.business.Report>();
 // Registrar servicio de background para limpieza automática
 builder.Services.AddHostedService<TemporaryFileCacheCleanupService>();
 
+// Registrar servicio de cola de reportes como singleton e iniciarlo como hosted service
+builder.Services.AddSingleton<ReportQueueService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ReportQueueService>());
+
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();

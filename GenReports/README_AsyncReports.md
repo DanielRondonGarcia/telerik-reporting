@@ -249,7 +249,7 @@ GET /api/AsyncReports/cache-stats
 
 ## Migración desde el Sistema Anterior
 
-1. **Datasets pequeños**: Mantener endpoints existentes
-2. **Datasets grandes**: Migrar a endpoints asíncronos
-3. **Implementación gradual**: Ambos sistemas pueden coexistir
-4. **Monitoreo**: Usar métricas para optimizar umbrales
+1. **Datasets pequeños**: Mantener endpoints existentes.
+2. **Datasets grandes**: Migrar a endpoints asíncronos.
+3. **Implementación gradual**: Ambos sistemas pueden coexistir.
+4. **Monitoreo**: Usar métricas para optimizar umbrales.

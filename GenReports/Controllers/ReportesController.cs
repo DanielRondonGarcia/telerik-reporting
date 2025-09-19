@@ -133,8 +133,9 @@ namespace GenReports.Controllers
 
                 // Convertir el objeto a JSON string
                 var jsonString = JsonSerializer.Serialize(dataSource);
-                Console.WriteLine($"JSON recibido: {jsonString}");
-
+                // Truncate JSON string to first 100 chars for logging
+                var truncatedJson = jsonString.Length > 100 ? jsonString.Substring(0, 100) + "..." : jsonString;
+                Console.WriteLine($"JSON recibido: {truncatedJson}");
                 // Calcular hash MD5 de los datos de entrada
                 string inputHash;
                 using (var md5 = MD5.Create())
@@ -374,7 +375,8 @@ namespace GenReports.Controllers
 
                 // Convertir el objeto a JSON string
                 var jsonString = JsonSerializer.Serialize(dataSource);
-                Console.WriteLine($"JSON recibido: {jsonString}");
+                var truncatedJson = jsonString.Length > 100 ? jsonString.Substring(0, 100) + "..." : jsonString;
+                Console.WriteLine($"JSON recibido: {truncatedJson}");
 
                 // Validar que el JSON no esté vacío
                 if (string.IsNullOrWhiteSpace(jsonString))

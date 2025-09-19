@@ -32,8 +32,10 @@ namespace GenReports.Services
         /// <param name="reportType">Tipo de reporte</param>
         /// <param name="userName">Usuario que solicita el reporte</param>
         /// <param name="isLargeDataset">Indica si es un dataset grande que requiere streaming</param>
+        /// <param name="processingMode">Modo de procesamiento: "batch" o "split"</param>
+        /// <param name="requestHash">Hash estable de la solicitud para caché (opcional)</param>
         /// <returns>ID del trabajo encolado</returns>
-        public string EnqueueReportJob(string jobId, string jsonData, string reportType, string userName, bool isLargeDataset = false)
+        public string EnqueueReportJob(string jobId, string jsonData, string reportType, string userName, bool isLargeDataset = false, string processingMode = "batch", string? requestHash = null)
         {
             var job = new ReportJob
             {
@@ -43,7 +45,9 @@ namespace GenReports.Services
                 UserName = userName,
                 IsLargeDataset = isLargeDataset,
                 CreatedAt = DateTime.UtcNow,
-                Status = ReportJobStatusEnum.Queued
+                Status = ReportJobStatusEnum.Queued,
+                ProcessingMode = string.IsNullOrWhiteSpace(processingMode) ? "batch" : processingMode.Trim().ToLowerInvariant(),
+                RequestHash = requestHash
             };
 
             _reportQueue.Enqueue(job);
@@ -53,12 +57,12 @@ namespace GenReports.Services
                 JobId = jobId,
                 Status = ReportJobStatusEnum.Queued,
                 CreatedAt = DateTime.UtcNow,
-                Message = "Trabajo encolado para procesamiento"
+                Message = $"Trabajo encolado para procesamiento (modo: {job.ProcessingMode})"
             };
 
             _jobStatuses.TryAdd(jobId, status);
             
-            _logger.LogInformation($"Trabajo de reporte encolado: {jobId} para usuario {userName}");
+            _logger.LogInformation($"Trabajo de reporte encolado: {jobId} para usuario {userName} (modo: {job.ProcessingMode})");
             
             return jobId;
         }
@@ -160,10 +164,10 @@ namespace GenReports.Services
         {
             try
             {
-                _logger.LogInformation($"Iniciando procesamiento del trabajo: {job.JobId}");
+                _logger.LogInformation($"Iniciando procesamiento del trabajo: {job.JobId} (modo: {job.ProcessingMode})");
                 
                 // Actualizar estado a procesando
-                UpdateJobStatus(job.JobId, ReportJobStatusEnum.Processing, "Procesando reporte...");
+                UpdateJobStatus(job.JobId, ReportJobStatusEnum.Processing, $"Procesando reporte (modo: {job.ProcessingMode})...");
 
                 using var scope = _serviceProvider.CreateScope();
                 var reportService = scope.ServiceProvider.GetRequiredService<Report>();
@@ -172,39 +176,34 @@ namespace GenReports.Services
                 ArchivoResult fileOutput;
                 ReportPerformanceMetrics metricas;
 
-                // Determinar si usar procesamiento streaming
-                if (job.IsLargeDataset)
+                // Determinar modo de procesamiento
+                if (string.Equals(job.ProcessingMode, "split", StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogInformation($"Usando procesamiento streaming para trabajo: {job.JobId}");
-                    
-                    using var jsonStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(job.JsonData));
-                    using var reportServiceScope = _serviceProvider.CreateScope();
-                    var reportServiceInstance = reportServiceScope.ServiceProvider.GetRequiredService<Report>();
-                    
-                    // Aquí necesitaríamos adaptar el método para usar streaming directamente
-                    // Por ahora usamos el método estándar
-                    fileOutput = await reportService.ExecuteBatchReportsCompressed(job.JsonData, job.ReportType, job.UserName);
-                    metricas = null; // TODO: Implementar métricas para procesamiento streaming
+                    _logger.LogInformation($"Usando procesamiento consolidado + split para trabajo: {job.JobId}");
+                    fileOutput = await reportService.ExecuteConsolidatedReportWithSplit(job.JsonData, job.ReportType, job.UserName);
+                    metricas = null; // TODO: métricas
                 }
                 else
                 {
-                    _logger.LogInformation($"Usando procesamiento estándar para trabajo: {job.JobId}");
+                    _logger.LogInformation($"Usando procesamiento batch para trabajo: {job.JobId}");
                     fileOutput = await reportService.ExecuteBatchReportsCompressed(job.JsonData, job.ReportType, job.UserName);
-                    metricas = null; // TODO: Implementar métricas para procesamiento estándar
+                    metricas = null; // TODO: métricas
                 }
 
                 if (fileOutput?.BytesArchivo != null)
                 {
-                    // Guardar archivo en caché temporal
+                    // Guardar archivo en caché temporal con hash estable (si no viene, usar jobId)
                     var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
                         ? "application/zip"
                         : "application/pdf";
+
+                    var cacheHash = string.IsNullOrWhiteSpace(job.RequestHash) ? job.JobId : job.RequestHash;
 
                     var tempFileInfo = await cacheService.StoreFileAsync(
                         fileOutput.BytesArchivo,
                         fileOutput.NombreArchivo,
                         contentType,
-                        job.JobId // Usar jobId como hash único
+                        cacheHash
                     );
 
                     // Actualizar estado a completado con información del archivo
@@ -274,6 +273,9 @@ namespace GenReports.Services
         public bool IsLargeDataset { get; set; }
         public DateTime CreatedAt { get; set; }
         public ReportJobStatusEnum Status { get; set; }
+        // Nuevo: modo de procesamiento y hash estable para caché
+        public string ProcessingMode { get; set; } = "batch";
+        public string? RequestHash { get; set; }
     }
 
     /// <summary>

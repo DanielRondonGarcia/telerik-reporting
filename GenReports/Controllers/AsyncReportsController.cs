@@ -3,6 +3,11 @@ using GenReports.Services;
 using GenReports.Models;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Http;
+using System.Linq;
+using System.IO;
 
 namespace GenReports.Controllers
 {
@@ -35,7 +40,8 @@ namespace GenReports.Controllers
         /// <param name="userName">Usuario que solicita el reporte</param>
         /// <param name="dataFile">Archivo JSON con los datos del reporte</param>
         /// <param name="isLargeDataset">Indica si es un dataset grande que requiere procesamiento especial</param>
-        /// <returns>ID del trabajo encolado</returns>
+        /// <param name="processingMode">Modo de procesamiento: "batch" o "split"</param>
+        /// <returns>ID del trabajo encolado o descarga inmediata si está en caché</returns>
         [HttpPost("queue-multipart")]
         [RequestSizeLimit(500_000_000)] // 500MB límite
         [RequestFormLimits(MultipartBodyLengthLimit = 500_000_000)]
@@ -44,7 +50,8 @@ namespace GenReports.Controllers
             [FromForm, Required] string reportType,
             [FromForm, Required] string userName,
             [Required] IFormFile dataFile,
-            [FromForm] bool isLargeDataset = true)
+            [FromForm] bool isLargeDataset = true,
+            [FromForm] string processingMode = "batch")
         {
             try
             {
@@ -65,6 +72,11 @@ namespace GenReports.Controllers
                 if (!dataFile.ContentType.Contains("json") && !dataFile.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                     return BadRequest("El archivo debe ser de tipo JSON");
 
+                // Validar processingMode
+                var mode = (processingMode ?? "batch").Trim().ToLowerInvariant();
+                if (mode != "batch" && mode != "split")
+                    return BadRequest("processingMode inválido. Valores permitidos: 'batch' o 'split'");
+
                 // Leer contenido del archivo
                 string jsonData;
                 using (var reader = new StreamReader(dataFile.OpenReadStream()))
@@ -82,13 +94,39 @@ namespace GenReports.Controllers
                     return BadRequest("El contenido del archivo no es JSON válido");
                 }
 
+                // Construir un hash estable de la solicitud para reusar caché si ya existe
+                // Clave = MD5( $"{reportType}|{mode}|MD5(json)" )
+                using var md5 = MD5.Create();
+                var jsonHash = Convert.ToHexString(md5.ComputeHash(Encoding.UTF8.GetBytes(jsonData))).ToLowerInvariant();
+                var composed = $"{reportType}|{mode}|{jsonHash}";
+                var requestHash = Convert.ToHexString(md5.ComputeHash(Encoding.UTF8.GetBytes(composed))).ToLowerInvariant();
+
+                // Si existe en caché, retornar descarga inmediata sin encolar
+                var cached = await _cacheService.FindByMD5HashAsync(requestHash);
+                if (cached != null)
+                {
+                    _logger.LogInformation("Reporte encontrado en caché. reportType={ReportType}, mode={Mode}, size={Size} bytes", reportType, mode, cached.FileSizeBytes);
+
+                    return Ok(new
+                    {
+                        CachedHit = true,
+                        Message = "Reporte encontrado en caché",
+                        FileName = cached.OriginalFileName,
+                        FileSizeBytes = cached.FileSizeBytes,
+                        DownloadUrl = $"/api/AsyncReports/download/{cached.DownloadToken}",
+                        ExpiresAt = cached.ExpiresAt,
+                        MD5Hash = cached.MD5Hash,
+                        ProcessingMode = mode
+                    });
+                }
+
                 // Generar ID único para el trabajo
                 var jobId = Guid.NewGuid().ToString();
 
-                // Encolar el trabajo
-                var enqueuedJobId = _queueService.EnqueueReportJob(jobId, jsonData, reportType, userName, isLargeDataset);
+                // Encolar el trabajo (se pasa el processingMode y el requestHash para que el archivo generado se guarde con ese hash)
+                var enqueuedJobId = _queueService.EnqueueReportJob(jobId, jsonData, reportType, userName, isLargeDataset, mode, requestHash);
 
-                _logger.LogInformation($"Reporte encolado vía multipart: {enqueuedJobId} para usuario {userName}, tamaño: {dataFile.Length} bytes");
+                _logger.LogInformation($"Reporte encolado vía multipart: {enqueuedJobId} para usuario {userName}, tamaño: {dataFile.Length} bytes, modo: {mode}");
 
                 return Ok(new
                 {
@@ -97,72 +135,13 @@ namespace GenReports.Controllers
                     EstimatedProcessingTime = isLargeDataset ? "5-15 minutos" : "2-5 minutos",
                     StatusCheckUrl = $"/api/AsyncReports/status/{enqueuedJobId}",
                     DataSizeBytes = dataFile.Length,
-                    IsLargeDataset = isLargeDataset
+                    IsLargeDataset = isLargeDataset,
+                    ProcessingMode = mode
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error encolando reporte multipart");
-                return StatusCode(500, new { Error = "Error interno del servidor", Details = ex.Message });
-            }
-        }
-
-        /// <summary>
-        /// Encola un reporte para procesamiento asíncrono usando JSON en el body (para datasets medianos)
-        /// </summary>
-        /// <param name="request">Datos del reporte</param>
-        /// <returns>ID del trabajo encolado</returns>
-        [HttpPost("queue-json")]
-        [RequestSizeLimit(100_000_000)] // 100MB límite para JSON
-        public async Task<IActionResult> QueueReportJson([FromBody] AsyncReportRequest request)
-        {
-            try
-            {
-                // Validaciones
-                if (string.IsNullOrWhiteSpace(request.ReportType))
-                    return BadRequest("El tipo de reporte es requerido");
-
-                if (string.IsNullOrWhiteSpace(request.UserName))
-                    return BadRequest("El nombre de usuario es requerido");
-
-                if (string.IsNullOrWhiteSpace(request.JsonData))
-                    return BadRequest("Los datos JSON son requeridos");
-
-                // Validar que sea JSON válido
-                try
-                {
-                    JsonDocument.Parse(request.JsonData);
-                }
-                catch (JsonException)
-                {
-                    return BadRequest("Los datos no son JSON válido");
-                }
-
-                // Generar ID único para el trabajo
-                var jobId = Guid.NewGuid().ToString();
-
-                // Determinar si es dataset grande basado en el tamaño
-                var jsonSizeBytes = System.Text.Encoding.UTF8.GetByteCount(request.JsonData);
-                var isLargeDataset = request.IsLargeDataset ?? jsonSizeBytes > 10_000_000; // 10MB
-
-                // Encolar el trabajo
-                var enqueuedJobId = _queueService.EnqueueReportJob(jobId, request.JsonData, request.ReportType, request.UserName, isLargeDataset);
-
-                _logger.LogInformation($"Reporte encolado vía JSON: {enqueuedJobId} para usuario {request.UserName}, tamaño: {jsonSizeBytes} bytes");
-
-                return Ok(new
-                {
-                    JobId = enqueuedJobId,
-                    Message = "Reporte encolado para procesamiento asíncrono",
-                    EstimatedProcessingTime = isLargeDataset ? "5-15 minutos" : "2-5 minutos",
-                    StatusCheckUrl = $"/api/AsyncReports/status/{enqueuedJobId}",
-                    DataSizeBytes = jsonSizeBytes,
-                    IsLargeDataset = isLargeDataset
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error encolando reporte JSON");
                 return StatusCode(500, new { Error = "Error interno del servidor", Details = ex.Message });
             }
         }
