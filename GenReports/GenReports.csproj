@@ -15,8 +15,7 @@
     <PackageReference Include="SharpZipLib" Version="1.4.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.4" />
     <PackageReference Include="Swashbuckle.AspNetCore.Annotations" Version="9.0.4" />
-    <!-- Librería gratuita para manipulación de PDFs -->
-    <PackageReference Include="PdfSharp" Version="6.1.1" />
+
     <!-- Usar Skia como motor gráfico para Telerik Reporting en Linux -->
     <PackageReference Include="Telerik.Drawing.Skia" Version="19.2.25.813" />
     <!-- Paquetes de Telerik Reporting, mantener versión coherente -->

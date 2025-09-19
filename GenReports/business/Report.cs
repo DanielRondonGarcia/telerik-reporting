@@ -1,7 +1,5 @@
 using GenReports.Models;
 using Microsoft.Extensions.Options;
-using PdfSharp.Pdf;
-using PdfSharp.Pdf.IO;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Threading;
@@ -709,7 +707,8 @@ namespace GenReports.business
                 Console.WriteLine($"Generando reporte consolidado con {reportData.Count} registros");
 
                 // PASO 1: Generar un PDF consolidado reutilizando GenerateConsolidatedReport
-                var reporteConsolidado = GenerateConsolidatedReport(reportData, reportType, userName);
+                // Generamos el PDF consolidado usando el generador de Telerik existente
+                var reporteConsolidado = GenerateTelerik(reportData, reportType, userName);
 
                 Console.WriteLine($"PDF consolidado generado exitosamente. Tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
 
@@ -717,8 +716,8 @@ namespace GenReports.business
                 try
                 {
                     using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
-                    using var verifyDoc = PdfReader.Open(verifyStream, PdfDocumentOpenMode.Import);
-                    var consolidatedPages = verifyDoc.PageCount;
+                    using var fileSourceVerify = new PdfFileSource(verifyStream);
+                    var consolidatedPages = fileSourceVerify.Pages.Length;
                     Console.WriteLine($"PDF consolidado contiene {consolidatedPages} páginas para {reportData.Count} registros.");
                 }
                 catch (Exception ex)
@@ -759,112 +758,7 @@ namespace GenReports.business
         /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
         private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
         {
-            try
-            {
-                Console.WriteLine($"Iniciando split del PDF consolidado. Tamaño: {consolidatedPdfBytes.Length} bytes");
-
-                // entries handled via entriesArr
-                using var pdfStream = new MemoryStream(consolidatedPdfBytes);
-                using var inputDocument = PdfReader.Open(pdfStream, PdfDocumentOpenMode.Import);
-                int totalPages = inputDocument.PageCount;
-                Console.WriteLine($"PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
-                var entriesArr = new ArchiveEntry[totalPages];
-                var pageCopyLock = new object();
-
-                // Dividir cada página en un archivo individual
-                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
-                Parallel.For(0, totalPages, parallelOptions, pageNumber =>
-                 {
-                    try
-                    {
-                        Console.WriteLine($"Procesando página {pageNumber + 1} de {totalPages}");
-
-                        // Crear un nuevo PDF con solo esta página
-                        using var outputStream = new MemoryStream();
-                        var outputDocument = new PdfDocument();
-
-                        // Copiar la página específica al nuevo documento
-                        lock (pageCopyLock)
-                        {
-                            var page = inputDocument.Pages[pageNumber];
-                            outputDocument.AddPage(page);
-                        }
-
-                        // Guardar el documento de salida
-                        outputDocument.Save(outputStream);
-                        outputDocument.Close();
-
-                        // Obtener los bytes del PDF individual
-                        var individualPdfBytes = outputStream.ToArray();
-
-                        if (individualPdfBytes.Length > 0)
-                        {
-                            // Crear nombre único para el archivo
-                            var nombreArchivo = $"Reporte_Pagina_{(pageNumber + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
-
-                            // Agregar a la colección para compresión
-                            entriesArr[pageNumber] = new ArchiveEntry(nombreArchivo, individualPdfBytes);
-
-                            Console.WriteLine($"Página {pageNumber + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Advertencia: La página {pageNumber + 1} resultó en un PDF vacío");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Error procesando página {pageNumber + 1}: {ex.Message}");
-                        // Continuar con la siguiente página en caso de error
-                    }
-                });
-
-                // Asegurar orden estable por número de página después de paralelizar
-                var entries = entriesArr.Where(e => e != null)!;
-                
-                var compressor = new ArchiveCompressor();
-                var build = await compressor.CreateArchivePrefer7zAsync(entries);
-                Console.WriteLine($"Archivo comprimido (split) generado en formato {build.Extension}. Tamaño: {build.Bytes.Length} bytes");
-                return build;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error en SplitPdfIntoIndividualFiles: {ex.Message}");
-                Console.WriteLine($"StackTrace: {ex.StackTrace}");
-
-                // En caso de error, crear un archivo comprimido con el PDF original como fallback
-                Console.WriteLine("Creando fallback con PDF consolidado original...");
-                var compressor = new ArchiveCompressor();
-                var build = await compressor.CreateArchivePrefer7zAsync(new[]
-                {
-                    new ArchiveEntry($"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf", consolidatedPdfBytes)
-                });
-                return build;
-            }
-        }
-
-        // Método GuardarAsync eliminado de Report; use ArchivoResult.GuardarAsync
-
-        /// <summary>
-        /// Genera un reporte PDF consolidado a partir de un JSON con múltiples registros.
-        /// </summary>
-        /// <param name="jsonString">JSON que contiene una propiedad "Data" con los registros</param>
-        /// <param name="reportType">Tipo de reporte</param>
-        /// <param name="userName">Usuario que genera el reporte</param>
-        /// <returns>ArchivoResult con los bytes del PDF consolidado</returns>
-        public ArchivoResult GenerateConsolidatedReport(List<object> reportData, string reportType, string userName = "SYSTEM")
-        {
-            Console.WriteLine($"Inicio de GenerateConsolidatedReport: {DateTime.Now}");
-
-            Console.WriteLine($"Generando PDF consolidado con {reportData.Count} registros para el reporte {reportType}");
-            var consolidado = GenerateTelerik(reportData, reportType, userName);
-            if (consolidado?.BytesArchivo == null || consolidado.BytesArchivo.Length == 0)
-            {
-                throw new InvalidOperationException("No se pudo generar el PDF consolidado");
-            }
-
-            Console.WriteLine($"PDF consolidado generado. Tamaño: {consolidado.BytesArchivo.Length} bytes");
-            return consolidado;
+            throw new NotSupportedException("Este método ha sido reemplazado por SplitPdfIntoIndividualFilesTelerik y ya no está disponible.");
         }
 
         /// <summary>
