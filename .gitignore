@@ -48,6 +48,11 @@ CodeCoverage/
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
+# Telerik License Files (sensitive information)
+**/telerik-license.txt
+**/telerik-license.*
+**/*telerik*license*
+
 # NUnit
 *.VisualState.xml
 TestResult.xml
