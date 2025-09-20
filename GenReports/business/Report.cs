@@ -695,8 +695,7 @@ namespace GenReports.business
                     throw new InvalidOperationException($"No se pudo generar ningún reporte. Errores: {string.Join("; ", erroresEncontrados)}");
                 }
 
-                var compressor = new ArchiveCompressor();
-                var build = await compressor.CreateArchivePrefer7zAsync(entries);
+                var build = await ArchiveCompressor.CreateArchiveAsync(entries);
 
                 // Crear el archivo de salida comprimido con nombre simple (sin ruta completa)
                 var nombreArchivoZip = $"Reportes_{reportType}_Batch_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
@@ -775,8 +774,8 @@ namespace GenReports.business
                     }
 
                     // Comprimir una sola vez con todas las entradas acumuladas
-                    var compressor = new ArchiveCompressor();
-                    var buildAgg = await compressor.CreateArchivePrefer7zAsync(aggregateEntries);
+                    var buildAgg = await ArchiveCompressor.CreateArchiveAsync(aggregateEntries);
+                    
                     var nombreZipAgg = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{buildAgg.Extension}";
 
                     var archivoAgg = new ArchivoResult
@@ -823,8 +822,8 @@ namespace GenReports.business
 
                         await SplitPdfToDirectoryTelerik(reporteConsolidado.BytesArchivo, total, jobDir, userName);
 
-                        var compressor = new ArchiveCompressor();
-                        var buildDisk = await compressor.CreateArchiveFromDirectoryPrefer7zAsync(jobDir);
+                        var buildDisk = await ArchiveCompressor.CreateArchiveFromDirectoryAsync(jobDir);
+                        
                         var nombreArchivoZipDisk = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{buildDisk.Extension}";
 
                         var archivoComprimidoDisk = new ArchivoResult
@@ -1039,8 +1038,7 @@ namespace GenReports.business
                     return new ArchiveBuildResult { Bytes = Array.Empty<byte>(), Extension = "zip", UsedSevenZip = false };
                 }
 
-                var compressor = new ArchiveCompressor();
-                var build = await compressor.CreateArchivePrefer7zAsync(entries);
+                var build = await ArchiveCompressor.CreateArchiveAsync(entries);
                 sw.Stop();
                 Console.WriteLine($"[Telerik] Split + compresión completados en {sw.Elapsed}. Formato: {build.Extension}. Tamaño: {build.Bytes.Length} bytes");
                 return build;
@@ -1059,8 +1057,7 @@ namespace GenReports.business
                 }
 
                 // Fallback: devolver ZIP con el PDF consolidado
-                var compressor = new ArchiveCompressor();
-                var build = await compressor.CreateArchivePrefer7zAsync(new[]
+                var build = await ArchiveCompressor.CreateArchiveAsync(new[]
                 {
                     new ArchiveEntry($"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf", consolidatedPdfBytes)
                 });
