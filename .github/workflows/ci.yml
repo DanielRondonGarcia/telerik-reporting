@@ -34,7 +34,9 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Restore dependencies
-        run: dotnet restore
+        run: dotnet restore --configfile GenReports/nuget.config
+        env:
+          TELERIK_NUGET_KEY: ${{ secrets.TELERIK_NUGET_KEY }}
 
       - name: Run tests
         run: dotnet test --no-restore || echo "No tests configured yet"
