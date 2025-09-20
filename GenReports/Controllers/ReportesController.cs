@@ -203,10 +203,8 @@ namespace GenReports.Controllers
                     throw new InvalidOperationException("No se pudo generar el reporte");
                 }
 
-                // Detectar tipo de contenido basado en la extensión
-                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
-                    ? "application/zip"
-                    : "application/pdf";
+                // Detectar tipo de contenido basado en la extensión usando método centralizado
+                var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
 
                 // Almacenar en caché temporal con hash personalizado
                 var tempFileInfo = await _cacheService.StoreFileAsync(
@@ -451,10 +449,8 @@ namespace GenReports.Controllers
                     throw new InvalidOperationException("No se pudo generar el reporte consolidado");
                 }
 
-                // Detectar tipo de contenido basado en la extensión
-                var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
-                    ? "application/zip"
-                    : "application/pdf";
+                // Detectar tipo de contenido basado en la extensión usando método centralizado
+                var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
 
                 // Almacenar en caché temporal con hash personalizado
                 var tempFileInfo = await _cacheService.StoreFileAsync(

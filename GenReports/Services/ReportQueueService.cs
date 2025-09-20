@@ -217,9 +217,7 @@ namespace GenReports.Services
                 if (fileOutput?.BytesArchivo != null)
                 {
                     // Guardar archivo en caché temporal con hash estable (si no viene, usar jobId)
-                    var contentType = fileOutput.NombreArchivo.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
-                        ? "application/zip"
-                        : "application/pdf";
+                    var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
 
                     var cacheHash = string.IsNullOrWhiteSpace(job.RequestHash) ? job.JobId : job.RequestHash;
 

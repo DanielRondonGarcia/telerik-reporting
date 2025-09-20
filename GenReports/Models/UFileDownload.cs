@@ -65,19 +65,7 @@ namespace GenReports.Models
         /// </summary>
         public void DetectContentType()
         {
-            if (string.IsNullOrEmpty(NombreArchivo))
-                return;
-
-            var extension = Path.GetExtension(NombreArchivo).ToLowerInvariant();
-            ContentType = extension switch
-            {
-                ".pdf" => "application/pdf",
-                ".zip" => "application/zip",
-                ".json" => "application/json",
-                ".xml" => "application/xml",
-                ".txt" => "text/plain",
-                _ => "application/octet-stream"
-            };
+            ContentType = UFile.GetContentTypeFromFileName(NombreArchivo);
         }
     }
 }
