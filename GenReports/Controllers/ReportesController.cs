@@ -1,10 +1,15 @@
+// ReportesController.cs
 using GenReports.business;
 using GenReports.Models;
 using GenReports.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging; // 1. Usar ILogger
 using Swashbuckle.AspNetCore.Annotations;
+using System;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace GenReports.Controllers
 {
@@ -14,199 +19,150 @@ namespace GenReports.Controllers
     {
         private readonly ITemporaryFileCacheService _cacheService;
         private readonly Report _reportService;
+        private readonly ILogger<ReportesController> _logger; // 2. Inyectar ILogger
 
-        public ReportesController(ITemporaryFileCacheService cacheService, Report reportService)
+        public ReportesController(
+            ITemporaryFileCacheService cacheService,
+            Report reportService,
+            ILogger<ReportesController> logger) // Inyectar en el constructor
         {
             _cacheService = cacheService;
             _reportService = reportService;
+            _logger = logger;
         }
 
-        /// <summary>
-        /// Genera reportes basados en los datos JSON proporcionados.
-        /// - Para un solo registro: retorna un archivo PDF individual
-        /// - Para múltiples registros: genera reportes individuales por cada registro y los comprime en un archivo ZIP
-        /// </summary>
-        /// <param name="dataSource">Datos en formato JSON para generar el reporte. Debe contener una propiedad "Data" con los registros</param>
-        /// <param name="reportType">Tipo de reporte a generar (opcional, por defecto "USUARIO")</param>
-        /// <param name="userName">Nombre del usuario que genera el reporte (opcional, por defecto "SYSTEM")</param>
-        /// <returns>
-        /// - Archivo PDF para un solo registro
-        /// - Archivo ZIP con múltiples PDFs para múltiples registros
-        /// </returns>
-        /// <remarks>
-        /// El endpoint detecta automáticamente si se envían múltiples registros en el array "Data"
-        /// y genera reportes individuales comprimidos para optimizar la transferencia de datos masivos.
-        ///
-        /// Ejemplo de JSON para un solo registro:
-        /// {
-        ///   "Data": { "campo1": "valor1", "campo2": "valor2" }
-        /// }
-        ///
-        /// Ejemplo de JSON para múltiples registros:
-        /// {
-        ///   "Data": [
-        ///     { "campo1": "valor1", "campo2": "valor2" },
-        ///     { "campo1": "valor3", "campo2": "valor4" }
-        ///   ]
-        /// }
-        ///
-        /// Ejemplo completo de request body:
-        ///
-        ///     POST /api/reportes/telerik/json/file/batch
-        ///     {
-        ///       "Data": [
-        ///         {
-        ///           "AppUser": "AACOSTAA",
-        ///           "IdentificactionCard": 1098613733,
-        ///           "Name": "ANDRES F. ACOSTA AVELLANEDA",
-        ///           "Zone": "11",
-        ///           "ZoneDescription": "ZONA CENTR0",
-        ///           "Dependency": "1",
-        ///           "DependencyDescription": null,
-        ///           "Office": "0",
-        ///           "OfficeDescription": "DEPENDENCIA NO ASIGNADA..",
-        ///           "Role": "0",
-        ///           "RoleDescription": "SIN DEFINIR",
-        ///           "Mail": null,
-        ///           "Extension": 1,
-        ///           "Supervisor": "AACOSTAA",
-        ///           "SupervisorName": "ANDRES F. ACOSTA AVELLANEDA",
-        ///           "Type": "B",
-        ///           "TypeDescription": "BASE DE DATOS",
-        ///           "MaximunSesssion": 5,
-        ///           "Status": "N",
-        ///           "Technician": "N",
-        ///           "Printer": null,
-        ///           "AuxiliaryPrinter": null,
-        ///           "CellPhone": null,
-        ///           "IssuanceCedula": null,
-        ///           "Password": null,
-        ///           "DeactivationDate": "2023-06-07T16:34:30",
-        ///           "Photo": null,
-        ///           "CompanyWork": null,
-        ///           "CompanyWorkName": null,
-        ///           "HasAuditProfile": false,
-        ///           "DbStatus": "N",
-        ///           "AccountStatus": null
-        ///         }
-        ///       ]
-        ///     }
-        ///
-        /// </remarks>
-        /// <response code="200">Reporte generado exitosamente (PDF individual o ZIP con múltiples PDFs)</response>
-        /// <response code="500">Error interno del servidor</response>
         [HttpPost("telerik/json/file/batch")]
         [SwaggerOperation(
             Summary = "Generar reportes con datos JSON (individual o masivo)",
-            Description = "Genera reportes PDF usando Telerik con los datos JSON proporcionados. Detecta automáticamente si es un registro único o múltiples registros y genera la salida correspondiente (PDF individual o ZIP con múltiples PDFs).",
+            Description = "Genera reportes PDF usando Telerik. Detecta si es un registro único o múltiple y genera la salida correspondiente (PDF individual o ZIP/7z).",
             OperationId = "GenerateReport"
         )]
         [SwaggerResponse(200, "Reporte(s) generado(s) exitosamente", typeof(ApiResponse<UFileDownload>))]
         [SwaggerResponse(500, "Error interno del servidor", typeof(ApiResponse<UFileDownload>))]
         public async Task<IActionResult> GenerateReport(
-            [FromBody]
-            [SwaggerRequestBody(
-                Description = "Datos JSON para generar el reporte. Puede contener cualquier estructura JSON válida.",
-                Required = true
-            )]
-            object dataSource,
-            [FromQuery]
-            [SwaggerParameter(
-                Description = "Tipo de reporte a generar",
-                Required = false
-            )]
-            string reportType = "USUARIO",
-            [FromQuery]
-            [SwaggerParameter(
-                Description = "Nombre del usuario que genera el reporte",
-                Required = false
-            )]
-            string userName = "SYSTEM")
+            [FromBody] object dataSource,
+            [FromQuery] string reportType = "USUARIO",
+            [FromQuery] string userName = "SYSTEM")
         {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            ArchivoResult? fileOutput = null;
+            var jsonString = JsonSerializer.Serialize(dataSource);
+            
+            // La lógica específica de este endpoint es decidir qué método de servicio llamar.
+            Func<Task<ArchivoResult>> reportGenerator = IsMultipleRecords(jsonString)
+                ? () =>
+                {
+                    _logger.LogInformation("Detectados múltiples registros. Generando reportes individuales comprimidos.");
+                    return _reportService.ExecuteBatchReportsCompressed(jsonString, reportType, userName);
+                }
+                : () =>
+                {
+                    _logger.LogInformation("Detectado registro único. Generando reporte individual.");
+                    return Task.FromResult(_reportService.ExecuteReport(jsonString, reportType, userName));
+                };
+            
+            // Usar el método centralizado para procesar la solicitud
+            return await ProcessReportRequestAsync(
+                jsonString,
+                reportType,
+                userName,
+                "batch",
+                "REPORT_GENERATION_ERROR",
+                reportGenerator);
+        }
+
+        [HttpPost("telerik/json/file/consolidated-split")]
+        [SwaggerOperation(
+            Summary = "Generar reportes masivos con estrategia de consolidación y división",
+            Description = "Genera un único PDF consolidado y luego lo divide en archivos individuales, ideal para comparar rendimiento.",
+            OperationId = "GenerateConsolidatedReportWithSplit"
+        )]
+        [ProducesResponseType(typeof(ApiResponse<UFileDownload>), 200)]
+        [ProducesResponseType(typeof(ApiResponse<string>), 400)]
+        [ProducesResponseType(typeof(ApiResponse<string>), 500)]
+        public async Task<IActionResult> GenerateConsolidatedReportWithSplit(
+            [FromBody] object dataSource,
+            [FromQuery] string reportType = "USUARIO_MASIVO",
+            [FromQuery] string userName = "SYSTEM")
+        {
+            var jsonString = JsonSerializer.Serialize(dataSource);
+
+            if (!IsMultipleRecords(jsonString))
+            {
+                return BadRequest(new ApiResponse<string>
+                {
+                    Success = false,
+                    Message = "Este endpoint requiere múltiples registros. Para un solo registro use el endpoint /batch",
+                    ErrorCode = "SINGLE_RECORD_NOT_SUPPORTED"
+                });
+            }
+
+            // La lógica específica es llamar al método de consolidación.
+            Func<Task<ArchivoResult>> reportGenerator = () =>
+            {
+                _logger.LogInformation("Generando reporte consolidado y aplicando split.");
+                return _reportService.ExecuteConsolidatedReportWithSplit(jsonString, reportType, userName);
+            };
+            
+            // Usar el método centralizado
+            return await ProcessReportRequestAsync(
+                jsonString,
+                reportType,
+                userName,
+                "consolidated-split",
+                "CONSOLIDATED_SPLIT_ERROR",
+                reportGenerator);
+        }
+
+        /// <summary>
+        /// Método centralizado para procesar una solicitud de generación de reporte, incluyendo caché,
+        /// ejecución, almacenamiento y manejo de errores.
+        /// </summary>
+        /// <param name="jsonString">El JSON de entrada para el reporte.</param>
+        /// <param name="reportType">El tipo de reporte.</param>
+        /// <param name="userName">El nombre de usuario.</param>
+        /// <param name="cacheKeySuffix">Un sufijo para diferenciar los hashes de caché entre endpoints.</param>
+        /// <param name="errorCode">El código de error a devolver en caso de fallo.</param>
+        /// <param name="reportGenerator">Función que ejecuta la generación del reporte real.</param>
+        /// <returns>Un IActionResult con la respuesta de la API.</returns>
+        private async Task<IActionResult> ProcessReportRequestAsync(
+            string jsonString,
+            string reportType,
+            string userName,
+            string cacheKeySuffix,
+            string errorCode,
+            Func<Task<ArchivoResult>> reportGenerator)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            _logger.LogInformation(
+                "Procesando solicitud de reporte para {ReportType} por {UserName} con sufijo {CacheSuffix}.",
+                reportType, userName, cacheKeySuffix);
 
             try
             {
-                Console.WriteLine($"=== ENDPOINT BATCH INICIADO ===");
-                Console.WriteLine($"ReportType: {reportType}, UserName: {userName}");
+                var inputHash = CalculateMD5Hash($"{jsonString}_{reportType}_{userName}_{cacheKeySuffix}");
+                _logger.LogInformation("Hash MD5 de entrada calculado: {InputHash}", inputHash);
 
-                // Convertir el objeto a JSON string
-                var jsonString = JsonSerializer.Serialize(dataSource);
-                // Truncate JSON string to first 100 chars for logging
-                var truncatedJson = jsonString.Length > 100 ? jsonString.Substring(0, 100) + "..." : jsonString;
-                Console.WriteLine($"JSON recibido: {truncatedJson}");
-                // Calcular hash MD5 de los datos de entrada
-                string inputHash;
-                using (var md5 = MD5.Create())
-                {
-                    var inputBytes = System.Text.Encoding.UTF8.GetBytes($"{jsonString}_{reportType}_{userName}");
-                    var hashBytes = md5.ComputeHash(inputBytes);
-                    inputHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-                }
-
-                Console.WriteLine($"Hash MD5 calculado: {inputHash}");
-
-                // Verificar si ya existe en caché
+                // 1. Verificar si ya existe en caché
                 var cachedFile = await _cacheService.FindByMD5HashAsync(inputHash);
                 if (cachedFile != null)
                 {
-                    Console.WriteLine($"Archivo encontrado en caché: {cachedFile.OriginalFileName}");
-
-                    // Generar URL de descarga
-                    var requestBaseUrl = $"{Request.Scheme}://{Request.Host}";
-                    var downloadUrl = _cacheService.GenerateDownloadUrl(cachedFile.DownloadToken, requestBaseUrl);
-
-                    var cachedResponse = new ApiResponse<UFileDownload>
-                    {
-                        Data = new UFileDownload
-                        {
-                            NombreArchivo = cachedFile.OriginalFileName,
-                            ContentType = cachedFile.ContentType,
-                            UrlDescarga = downloadUrl,
-                            FechaExpiracion = cachedFile.ExpiresAt,
-                            MD5Hash = inputHash,
-                            EncontradoEnCache = true
-                        },
-                        Success = true,
-                        Message = "Reporte obtenido desde caché temporal"
-                    };
-
                     stopwatch.Stop();
-                    Console.WriteLine($"=== ENDPOINT BATCH COMPLETADO (CACHÉ) en {stopwatch.ElapsedMilliseconds}ms ===");
-                    return Ok(cachedResponse);
+                    _logger.LogInformation("Archivo encontrado en caché: {FileName}. Proceso completado en {ElapsedMilliseconds}ms.",
+                        cachedFile.OriginalFileName, stopwatch.ElapsedMilliseconds);
+                    
+                    return Ok(CreateCachedApiResponse(cachedFile, inputHash));
                 }
 
-                Console.WriteLine("Archivo no encontrado en caché, generando nuevo reporte...");
+                _logger.LogInformation("Archivo no encontrado en caché. Generando nuevo reporte...");
 
-                // Usar instancia del negocio de reportes inyectada
-                var reporteNegocio = _reportService;
-
-                // Determinar si es un reporte masivo (múltiples registros)
-                var isMultipleRecords = IsMultipleRecords(jsonString);
-
-                if (isMultipleRecords)
+                // 2. Generar el reporte usando la función proporcionada
+                var fileOutput = await reportGenerator();
+                if (fileOutput?.BytesArchivo == null || fileOutput.BytesArchivo.Length == 0)
                 {
-                    Console.WriteLine("Detectados múltiples registros - Generando reportes individuales comprimidos");
-                    // Generar reportes individuales comprimidos
-                    fileOutput = await reporteNegocio.ExecuteBatchReportsCompressed(jsonString, reportType, userName);
-                }
-                else
-                {
-                    Console.WriteLine("Detectado registro único - Generando reporte individual");
-                    // Generar reporte único como antes
-                    fileOutput = reporteNegocio.ExecuteReport(jsonString, reportType, userName);
+                    throw new InvalidOperationException("El servicio de reportes no devolvió ningún contenido.");
                 }
 
-                if (fileOutput == null)
-                {
-                    throw new InvalidOperationException("No se pudo generar el reporte");
-                }
-
-                // Detectar tipo de contenido basado en la extensión usando método centralizado
+                // 3. Almacenar en caché y crear la respuesta
                 var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
-
-                // Almacenar en caché temporal con hash personalizado
                 var tempFileInfo = await _cacheService.StoreFileAsync(
                     fileOutput.BytesArchivo,
                     fileOutput.NombreArchivo,
@@ -214,53 +170,28 @@ namespace GenReports.Controllers
                     inputHash
                 );
 
-                // Generar URL de descarga
-                var baseUrl = $"{Request.Scheme}://{Request.Host}";
-                var downloadUrl2 = _cacheService.GenerateDownloadUrl(tempFileInfo.DownloadToken, baseUrl);
-
                 stopwatch.Stop();
-                Console.WriteLine($"=== ENDPOINT BATCH COMPLETADO en {stopwatch.ElapsedMilliseconds}ms ===");
+                _logger.LogInformation("Reporte generado y almacenado exitosamente en {ElapsedMilliseconds}ms.", stopwatch.ElapsedMilliseconds);
 
-                var response = new ApiResponse<UFileDownload>
-                {
-                    Data = new UFileDownload
-                    {
-                        NombreArchivo = tempFileInfo.OriginalFileName,
-                        ContentType = contentType,
-                        UrlDescarga = downloadUrl2,
-                        FechaExpiracion = tempFileInfo.ExpiresAt,
-                        MD5Hash = inputHash,
-                        EncontradoEnCache = false
-                    },
-                    Success = true,
-                    Message = $"Reporte generado exitosamente en {stopwatch.ElapsedMilliseconds}ms"
-                };
-
-                return Ok(response);
+                return Ok(CreateSuccessApiResponse(tempFileInfo, inputHash, stopwatch.ElapsedMilliseconds));
             }
             catch (Exception ex)
             {
                 stopwatch.Stop();
-                Console.WriteLine($"Error en endpoint batch después de {stopwatch.ElapsedMilliseconds}ms: {ex.Message}");
-                Console.WriteLine($"StackTrace: {ex.StackTrace}");
-
-                var errorResponse = new ApiResponse<UFileDownload>
+                _logger.LogError(ex, "Error generando reporte para {ReportType} después de {ElapsedMilliseconds}ms. Error: {ErrorMessage}",
+                    reportType, stopwatch.ElapsedMilliseconds, ex.Message);
+                
+                return StatusCode(500, new ApiResponse<UFileDownload>
                 {
-                    Data = null,
                     Success = false,
                     Message = $"Error al generar el reporte: {ex.Message}",
-                    ErrorCode = "REPORT_GENERATION_ERROR"
-                };
-
-                return StatusCode(500, errorResponse);
+                    ErrorCode = errorCode
+                });
             }
         }
 
-        /// <summary>
-        /// Determina si el JSON contiene múltiples registros
-        /// </summary>
-        /// <param name="jsonString">JSON string a analizar</param>
-        /// <returns>True si contiene múltiples registros, False si es un solo registro</returns>
+        #region Helper Methods
+
         private bool IsMultipleRecords(string jsonString)
         {
             try
@@ -268,45 +199,25 @@ namespace GenReports.Controllers
                 using var document = JsonDocument.Parse(jsonString);
                 var root = document.RootElement;
 
-                // Intentar obtener la propiedad "Data" sin sensibilidad a mayúsculas/minúsculas
-                JsonElement dataElement;
-                if (!TryGetPropertyCaseInsensitive(root, "Data", out dataElement))
+                if (TryGetPropertyCaseInsensitive(root, "Data", out var dataElement) && dataElement.ValueKind == JsonValueKind.Array)
                 {
-                    // Si no existe la propiedad Data, aceptar también cuando la raíz es un arreglo
-                    if (root.ValueKind == JsonValueKind.Array)
-                    {
-                        var rootArrayLength = root.GetArrayLength();
-                        Console.WriteLine($"Número de registros detectados (raíz como arreglo): {rootArrayLength}");
-                        return rootArrayLength > 1;
-                    }
-
-                    // Si no es arreglo, considerarlo como un solo registro
-                    return false;
+                    return dataElement.GetArrayLength() > 1;
+                }
+                
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return root.GetArrayLength() > 1;
                 }
 
-                // Si Data es un array con más de un elemento, es masivo
-                if (dataElement.ValueKind == JsonValueKind.Array)
-                {
-                    var arrayLength = dataElement.GetArrayLength();
-                    Console.WriteLine($"Número de registros detectados: {arrayLength}");
-                    return arrayLength > 1;
-                }
-
-                // Si Data no es un array, es un solo registro
                 return false;
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                Console.WriteLine($"Error analizando JSON para detectar múltiples registros: {ex.Message}");
+                _logger.LogWarning(ex, "Error al analizar JSON para detectar múltiples registros. Se asumirá un solo registro.");
                 return false;
             }
         }
 
-        /// <summary>
-        /// Calcula el hash MD5 de una cadena de texto
-        /// </summary>
-        /// <param name="input">Texto de entrada</param>
-        /// <returns>Hash MD5 en formato hexadecimal</returns>
         private string CalculateMD5Hash(string input)
         {
             using var md5 = MD5.Create();
@@ -315,211 +226,64 @@ namespace GenReports.Controllers
             return Convert.ToHexString(hashBytes).ToLowerInvariant();
         }
 
-        /// <summary>
-        /// Genera reportes usando el método consolidado + split para comparación de rendimiento.
-        /// Genera un PDF consolidado con todos los registros y luego lo divide en archivos individuales.
-        /// </summary>
-        /// <param name="dataSource">Datos en formato JSON para generar el reporte. Debe contener una propiedad "Data" con los registros</param>
-        /// <param name="reportType">Tipo de reporte a generar</param>
-        /// <param name="userName">Nombre del usuario que solicita el reporte</param>
-        /// <returns>Archivo ZIP con múltiples PDFs generados mediante consolidación + split</returns>
-        /// <remarks>
-        /// Este endpoint implementa una estrategia diferente al endpoint /batch:
-        /// 1. Genera UN solo reporte PDF consolidado con todos los registros
-        /// 2. Aplica split usando PdfStreamWriter de Telerik para dividirlo en archivos individuales
-        /// 3. Comprime los archivos resultantes en un ZIP
-        ///
-        /// Úsalo para comparar rendimiento contra el método de generación individual (/batch).
-        ///
-        /// Ejemplo de JSON:
-        /// {
-        ///   "Data": [
-        ///     { "campo1": "valor1", "campo2": "valor2" },
-        ///     { "campo1": "valor3", "campo2": "valor4" }
-        ///   ]
-        /// }
-        /// </remarks>
-        [HttpPost("telerik/json/file/consolidated-split")]
-        [ProducesResponseType(typeof(UFileDownload), 200)]
-        [ProducesResponseType(typeof(ApiResponse<string>), 400)]
-        [ProducesResponseType(typeof(ApiResponse<string>), 500)]
-        public async Task<IActionResult> GenerateConsolidatedReportWithSplit(
-            [FromBody]
-            [SwaggerRequestBody(
-                Description = "Datos JSON para generar el reporte consolidado",
-                Required = true
-            )]
-            object dataSource,
-            [FromQuery]
-            [SwaggerParameter(
-                Description = "Tipo de reporte a generar",
-                Required = false
-            )]
-            string reportType = "USUARIO_MASIVO",
-            [FromQuery]
-            [SwaggerParameter(
-                Description = "Nombre del usuario que solicita el reporte",
-                Required = false
-            )]
-            string userName = "SYSTEM")
-        {
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            ArchivoResult fileOutput = null;
-
-            try
-            {
-                Console.WriteLine($"=== ENDPOINT CONSOLIDADO+SPLIT INICIADO ===");
-                Console.WriteLine($"ReportType: {reportType}, UserName: {userName}");
-
-                // Convertir el objeto a JSON string
-                var jsonString = JsonSerializer.Serialize(dataSource);
-                var truncatedJson = jsonString.Length > 100 ? jsonString.Substring(0, 100) + "..." : jsonString;
-                Console.WriteLine($"JSON recibido: {truncatedJson}");
-
-                // Validar que el JSON no esté vacío
-                if (string.IsNullOrWhiteSpace(jsonString))
-                {
-                    throw new ArgumentException("El JSON del reporte no puede estar vacío", nameof(jsonString));
-                }
-
-                // Verificar que hay múltiples registros
-                var isMultipleRecords = IsMultipleRecords(jsonString);
-                if (!isMultipleRecords)
-                {
-                    return BadRequest(new ApiResponse<string>
-                    {
-                        Success = false,
-                        Message = "Este endpoint requiere múltiples registros. Para un solo registro use el endpoint /batch",
-                        ErrorCode = "SINGLE_RECORD_NOT_SUPPORTED"
-                    });
-                }
-
-                // Calcular hash MD5 de los datos de entrada
-                string inputHash;
-                using (var md5 = MD5.Create())
-                {
-                    var inputBytes = System.Text.Encoding.UTF8.GetBytes($"{jsonString}_consolidated");
-                    var hashBytes = md5.ComputeHash(inputBytes);
-                    inputHash = Convert.ToHexString(hashBytes).ToLowerInvariant();
-                }
-
-                Console.WriteLine($"Hash MD5 calculado: {inputHash}");
-
-                // Verificar si ya existe en caché
-                var cachedFile = await _cacheService.FindByMD5HashAsync(inputHash);
-                if (cachedFile != null)
-                {
-                    Console.WriteLine($"Archivo encontrado en caché: {cachedFile.OriginalFileName}");
-
-                    // Generar URL de descarga
-                    var requestBaseUrl = $"{Request.Scheme}://{Request.Host}";
-                    var downloadUrl = _cacheService.GenerateDownloadUrl(cachedFile.DownloadToken, requestBaseUrl);
-
-                    var cachedResponse = new ApiResponse<UFileDownload>
-                    {
-                        Data = new UFileDownload
-                        {
-                            NombreArchivo = cachedFile.OriginalFileName,
-                            ContentType = cachedFile.ContentType,
-                            UrlDescarga = downloadUrl,
-                            FechaExpiracion = cachedFile.ExpiresAt,
-                            MD5Hash = inputHash,
-                            EncontradoEnCache = true
-                        },
-                        Success = true,
-                        Message = "Reporte consolidado obtenido desde caché temporal"
-                    };
-
-                    stopwatch.Stop();
-                    Console.WriteLine($"=== ENDPOINT CONSOLIDADO+SPLIT COMPLETADO (CACHÉ) en {stopwatch.ElapsedMilliseconds}ms ===");
-                    return Ok(cachedResponse);
-                }
-
-                Console.WriteLine("Archivo no encontrado en caché, generando nuevo reporte consolidado...");
-
-                // Usar instancia del negocio de reportes inyectada
-                var reporteNegocio = _reportService;
-
-                Console.WriteLine("Generando reporte consolidado y aplicando split...");
-                // Generar reporte consolidado y aplicar split
-                fileOutput = await reporteNegocio.ExecuteConsolidatedReportWithSplit(jsonString, reportType, userName);
-
-                if (fileOutput == null)
-                {
-                    throw new InvalidOperationException("No se pudo generar el reporte consolidado");
-                }
-
-                // Detectar tipo de contenido basado en la extensión usando método centralizado
-                var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
-
-                // Almacenar en caché temporal con hash personalizado
-                var tempFileInfo = await _cacheService.StoreFileAsync(
-                    fileOutput.BytesArchivo,
-                    fileOutput.NombreArchivo,
-                    contentType,
-                    inputHash
-                );
-
-                // Generar URL de descarga
-                var baseUrl = $"{Request.Scheme}://{Request.Host}";
-                var downloadUrl2 = _cacheService.GenerateDownloadUrl(tempFileInfo.DownloadToken, baseUrl);
-
-                stopwatch.Stop();
-                Console.WriteLine($"=== ENDPOINT CONSOLIDADO+SPLIT COMPLETADO en {stopwatch.ElapsedMilliseconds}ms ===");
-
-                var response = new ApiResponse<UFileDownload>
-                {
-                    Data = new UFileDownload
-                    {
-                        NombreArchivo = tempFileInfo.OriginalFileName,
-                        ContentType = contentType,
-                        UrlDescarga = downloadUrl2,
-                        FechaExpiracion = tempFileInfo.ExpiresAt,
-                        MD5Hash = inputHash,
-                        EncontradoEnCache = false
-                    },
-                    Success = true,
-                    Message = $"Reporte consolidado con split generado exitosamente en {stopwatch.ElapsedMilliseconds}ms"
-                };
-
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                Console.WriteLine($"Error en endpoint consolidado+split después de {stopwatch.ElapsedMilliseconds}ms: {ex.Message}");
-                Console.WriteLine($"StackTrace: {ex.StackTrace}");
-
-                var errorResponse = new ApiResponse<UFileDownload>
-                {
-                    Data = null,
-                    Success = false,
-                    Message = $"Error generando reporte consolidado con split: {ex.Message}",
-                    ErrorCode = "CONSOLIDATED_SPLIT_ERROR"
-                };
-
-                return StatusCode(500, errorResponse);
-            }
-        }
-
-
-
-        // Helper local para leer propiedades de forma case-insensitive
         private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
         {
-            if (element.ValueKind == JsonValueKind.Object)
+            value = default;
+            if (element.ValueKind != JsonValueKind.Object) return false;
+
+            foreach (var prop in element.EnumerateObject())
             {
-                foreach (var prop in element.EnumerateObject())
+                if (prop.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        value = prop.Value;
-                        return true;
-                    }
+                    value = prop.Value;
+                    return true;
                 }
             }
-            value = default;
             return false;
         }
+
+        private ApiResponse<UFileDownload> CreateSuccessApiResponse(TemporaryFileInfo tempFileInfo, string md5Hash, long elapsedMilliseconds)
+        {
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            var downloadUrl = _cacheService.GenerateDownloadUrl(tempFileInfo.DownloadToken, baseUrl);
+
+            return new ApiResponse<UFileDownload>
+            {
+                Data = new UFileDownload
+                {
+                    NombreArchivo = tempFileInfo.OriginalFileName,
+                    ContentType = tempFileInfo.ContentType,
+                    UrlDescarga = downloadUrl,
+                    FechaExpiracion = tempFileInfo.ExpiresAt,
+                    MD5Hash = md5Hash,
+                    EncontradoEnCache = false
+                },
+                Success = true,
+                Message = $"Reporte generado exitosamente en {elapsedMilliseconds}ms"
+            };
+        }
+
+        private ApiResponse<UFileDownload> CreateCachedApiResponse(TemporaryFileInfo cachedFile, string md5Hash)
+        {
+            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            var downloadUrl = _cacheService.GenerateDownloadUrl(cachedFile.DownloadToken, baseUrl);
+
+            return new ApiResponse<UFileDownload>
+            {
+                Data = new UFileDownload
+                {
+                    NombreArchivo = cachedFile.OriginalFileName,
+                    ContentType = cachedFile.ContentType,
+                    UrlDescarga = downloadUrl,
+                    FechaExpiracion = cachedFile.ExpiresAt,
+                    MD5Hash = md5Hash,
+                    EncontradoEnCache = true
+                },
+                Success = true,
+                Message = "Reporte obtenido desde caché temporal"
+            };
+        }
+
+        #endregion
     }
 }
