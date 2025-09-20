@@ -43,8 +43,8 @@ namespace GenReports.Controllers
         /// <param name="processingMode">Modo de procesamiento: "batch" o "split"</param>
         /// <returns>ID del trabajo encolado o descarga inmediata si está en caché</returns>
         [HttpPost("queue-multipart")]
-        [RequestSizeLimit(500_000_000)] // 500MB límite
-        [RequestFormLimits(MultipartBodyLengthLimit = 500_000_000)]
+        [RequestSizeLimit(1_000_000_000)] // 1GB límite
+        [RequestFormLimits(MultipartBodyLengthLimit = 1_000_000_000)]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> QueueReportMultipart(
             [FromForm, Required] string reportType,
@@ -65,8 +65,8 @@ namespace GenReports.Controllers
                 if (dataFile == null || dataFile.Length == 0)
                     return BadRequest("El archivo de datos es requerido");
 
-                if (dataFile.Length > 500_000_000) // 500MB
-                    return BadRequest("El archivo excede el tamaño máximo permitido (500MB)");
+                if (dataFile.Length > 1_000_000_000) // 1GB
+                    return BadRequest("El archivo excede el tamaño máximo permitido (1GB)");
 
                 // Verificar que sea un archivo JSON
                 if (!dataFile.ContentType.Contains("json") && !dataFile.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
@@ -173,10 +173,20 @@ namespace GenReports.Controllers
                     DownloadUrl = status.Status == ReportJobStatusEnum.Completed && !string.IsNullOrEmpty(status.DownloadToken)
                         ? $"/api/AsyncReports/download/{status.DownloadToken}"
                         : null,
+                    ProcessingMode = status.ProcessingMode,
+                    Progress = new
+                    {
+                        ProcessedRecords = status.ProcessedRecords,
+                        TotalRecords = status.TotalRecords,
+                        Percent = status.PercentComplete,
+                        CurrentRps = status.CurrentRecordsPerSecond,
+                        StartedAt = status.StartedAt
+                    },
                     PerformanceMetrics = status.PerformanceMetrics != null ? new
                     {
                         ProcessingTimeMs = status.PerformanceMetrics.TotalExecutionTimeMs,
-                        RecordsProcessed = status.PerformanceMetrics.RecordsProcessed
+                        RecordsProcessed = status.PerformanceMetrics.RecordsProcessed,
+                        RecordsPerSecond = status.PerformanceMetrics.RecordsPerSecond
                     } : null
                 };
 
@@ -237,7 +247,16 @@ namespace GenReports.Controllers
                         Message = job.Message,
                         CreatedAt = job.CreatedAt,
                         FileName = job.FileName,
-                        FileSizeBytes = job.FileSizeBytes
+                        FileSizeBytes = job.FileSizeBytes,
+                        ProcessingMode = job.ProcessingMode,
+                        Progress = new
+                        {
+                            ProcessedRecords = job.ProcessedRecords,
+                            TotalRecords = job.TotalRecords,
+                            Percent = job.PercentComplete,
+                            CurrentRps = job.CurrentRecordsPerSecond,
+                            StartedAt = job.StartedAt
+                        }
                     })
                     .ToList();
 

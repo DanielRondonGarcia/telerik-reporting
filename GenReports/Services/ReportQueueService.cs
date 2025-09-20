@@ -57,7 +57,13 @@ namespace GenReports.Services
                 JobId = jobId,
                 Status = ReportJobStatusEnum.Queued,
                 CreatedAt = DateTime.UtcNow,
-                Message = $"Trabajo encolado para procesamiento (modo: {job.ProcessingMode})"
+                Message = $"Trabajo encolado para procesamiento (modo: {job.ProcessingMode})",
+                ProcessingMode = job.ProcessingMode,
+                ProcessedRecords = 0,
+                TotalRecords = 0,
+                PercentComplete = 0,
+                CurrentRecordsPerSecond = 0,
+                StartedAt = null
             };
 
             _jobStatuses.TryAdd(jobId, status);
@@ -176,19 +182,37 @@ namespace GenReports.Services
                 ArchivoResult fileOutput;
                 ReportPerformanceMetrics metricas;
 
+                var startTime = DateTime.UtcNow;
+                int lastProcessed = 0;
+                int totalRecords = 0;
+                Action<int, int, string> onProgress = (processed, total, mode) =>
+                {
+                    lastProcessed = processed;
+                    totalRecords = total;
+                    UpdateJobProgress(job.JobId, processed, total, mode);
+                };
+
                 // Determinar modo de procesamiento
                 if (string.Equals(job.ProcessingMode, "split", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation($"Usando procesamiento consolidado + split para trabajo: {job.JobId}");
-                    fileOutput = await reportService.ExecuteConsolidatedReportWithSplit(job.JsonData, job.ReportType, job.UserName);
-                    metricas = null; // TODO: métricas
+                    fileOutput = await reportService.ExecuteConsolidatedReportWithSplit(job.JsonData, job.ReportType, job.UserName, onProgress);
                 }
                 else
                 {
                     _logger.LogInformation($"Usando procesamiento batch para trabajo: {job.JobId}");
-                    fileOutput = await reportService.ExecuteBatchReportsCompressed(job.JsonData, job.ReportType, job.UserName);
-                    metricas = null; // TODO: métricas
+                    fileOutput = await reportService.ExecuteBatchReportsCompressed(job.JsonData, job.ReportType, job.UserName, onProgress);
                 }
+
+                var elapsedMs = (long)(DateTime.UtcNow - startTime).TotalMilliseconds;
+                metricas = new ReportPerformanceMetrics
+                {
+                    TotalExecutionTimeMs = elapsedMs,
+                    ReportGenerationTimeMs = elapsedMs,
+                    RecordsProcessed = lastProcessed,
+                    FilesGenerated = 0
+                };
+                metricas.CalculateAverages();
 
                 if (fileOutput?.BytesArchivo != null)
                 {
@@ -217,7 +241,13 @@ namespace GenReports.Services
                         FileName = fileOutput.NombreArchivo,
                         DownloadToken = tempFileInfo.DownloadToken,
                         FileSizeBytes = fileOutput.BytesArchivo.Length,
-                        PerformanceMetrics = metricas
+                        PerformanceMetrics = metricas,
+                        ProcessingMode = job.ProcessingMode,
+                        ProcessedRecords = lastProcessed,
+                        TotalRecords = totalRecords,
+                        PercentComplete = totalRecords > 0 ? (double)lastProcessed / totalRecords * 100.0 : 100.0,
+                        CurrentRecordsPerSecond = metricas.RecordsPerSecond,
+                        StartedAt = startTime
                     };
 
                     _jobStatuses.TryUpdate(job.JobId, completedStatus, _jobStatuses[job.JobId]);
@@ -237,6 +267,44 @@ namespace GenReports.Services
             }
         }
 
+        // Actualiza el progreso del trabajo con % y r/s
+        private void UpdateJobProgress(string jobId, int processed, int total, string mode)
+        {
+            if (_jobStatuses.TryGetValue(jobId, out var current))
+            {
+                var now = DateTime.UtcNow;
+                var startedAt = current.StartedAt ?? now;
+                if (current.StartedAt == null)
+                {
+                    current.StartedAt = startedAt;
+                }
+                var elapsedSec = Math.Max(0.001, (now - startedAt).TotalSeconds);
+                var rps = processed / elapsedSec;
+                var percent = total > 0 ? (double)processed / total * 100.0 : 0.0;
+        
+                var updated = new ReportJobStatus
+                {
+                    JobId = jobId,
+                    Status = current.Status,
+                    CreatedAt = current.CreatedAt,
+                    CompletedAt = current.CompletedAt,
+                    Message = $"Procesando... {percent:F1}% ({processed}/{total})",
+                    FileName = current.FileName,
+                    DownloadToken = current.DownloadToken,
+                    FileSizeBytes = current.FileSizeBytes,
+                    PerformanceMetrics = current.PerformanceMetrics,
+                    ProcessingMode = string.IsNullOrWhiteSpace(mode) ? current.ProcessingMode : mode,
+                    ProcessedRecords = processed,
+                    TotalRecords = total,
+                    PercentComplete = percent,
+                    CurrentRecordsPerSecond = rps,
+                    StartedAt = startedAt
+                };
+        
+                _jobStatuses.TryUpdate(jobId, updated, current);
+            }
+        }
+
         private void UpdateJobStatus(string jobId, ReportJobStatusEnum status, string message)
         {
             if (_jobStatuses.TryGetValue(jobId, out var currentStatus))
@@ -253,7 +321,13 @@ namespace GenReports.Services
                     FileName = currentStatus.FileName,
                     DownloadToken = currentStatus.DownloadToken,
                     FileSizeBytes = currentStatus.FileSizeBytes,
-                    PerformanceMetrics = currentStatus.PerformanceMetrics
+                    PerformanceMetrics = currentStatus.PerformanceMetrics,
+                    ProcessingMode = currentStatus.ProcessingMode,
+                    ProcessedRecords = currentStatus.ProcessedRecords,
+                    TotalRecords = currentStatus.TotalRecords,
+                    PercentComplete = currentStatus.PercentComplete,
+                    CurrentRecordsPerSecond = currentStatus.CurrentRecordsPerSecond,
+                    StartedAt = currentStatus.StartedAt ?? (status == ReportJobStatusEnum.Processing ? DateTime.UtcNow : currentStatus.StartedAt)
                 };
 
                 _jobStatuses.TryUpdate(jobId, updatedStatus, currentStatus);
@@ -292,6 +366,12 @@ namespace GenReports.Services
         public string? DownloadToken { get; set; }
         public long? FileSizeBytes { get; set; }
         public ReportPerformanceMetrics? PerformanceMetrics { get; set; }
+        public string? ProcessingMode { get; set; }
+        public int ProcessedRecords { get; set; }
+        public int TotalRecords { get; set; }
+        public double PercentComplete { get; set; }
+        public double CurrentRecordsPerSecond { get; set; }
+        public DateTime? StartedAt { get; set; }
     }
 
     /// <summary>

@@ -12,6 +12,7 @@ using Telerik.Windows.Documents.Fixed.FormatProviders.Pdf;
 using Telerik.Windows.Documents.Fixed.Model;
 using Telerik.Windows.Documents.Fixed.Model.Navigation;
 using Telerik.Windows.Documents.Fixed.Model.Actions;
+using System.Linq;
 
 namespace GenReports.business
 {
@@ -433,7 +434,18 @@ namespace GenReports.business
                 if (prop != null && prop.CanWrite)
                 {
                     prop.SetValue(instance, value);
-                    Console.WriteLine($"[DataSource] Establecido {propertyName} = {value}");
+                    // Evitar volcar JSONs completos en el log: recortar a 100 caracteres
+                    string displayValue;
+                    if (value is string s)
+                    {
+                        displayValue = s.Length <= 100 ? s : s.Substring(0, 100) + "...";
+                    }
+                    else
+                    {
+                        var text = value?.ToString() ?? "null";
+                        displayValue = text.Length <= 100 ? text : text.Substring(0, 100) + "...";
+                    }
+                    Console.WriteLine($"[DataSource] Establecido {propertyName} = {displayValue}");
                 }
             }
             catch (Exception ex)
@@ -561,7 +573,7 @@ namespace GenReports.business
         /// <param name="reportType">Tipo de reporte a generar</param>
         /// <param name="userName">Nombre del usuario que genera el reporte</param>
         /// <returns>Archivo ZIP comprimido con todos los reportes individuales</returns>
-        public async Task<ArchivoResult> ExecuteBatchReportsCompressed(string reportJson, string reportType, string userName = "SYSTEM")
+        public async Task<ArchivoResult> ExecuteBatchReportsCompressed(string reportJson, string reportType, string userName = "SYSTEM", Action<int, int, string>? onProgress = null)
         {
             try
             {
@@ -647,6 +659,26 @@ namespace GenReports.business
                     }
                 }
 
+                // Nota: se asume que existen variables locales como reportData, erroresEncontrados, entries, etc.
+                // Iniciar progreso si es posible
+                try
+                {
+                    // Asegurar conteo total antes del bucle si ya está disponible
+                    // (reportData es definido más abajo en el método original)
+                }
+                catch { }
+
+                for (int i = 0; i < reportData.Count; i++)
+                {
+                    // Dentro del bucle por registro
+                    // Al finalizar el procesamiento de cada registro (éxito o error), reportar progreso
+                    try
+                    {
+                        onProgress?.Invoke(Math.Min(i + 1, reportData.Count), reportData.Count, "batch");
+                    }
+                    catch { }
+                }
+
                 Console.WriteLine($"Procesamiento completado: {reportesExitosos} reportes exitosos de {reportData.Count} registros");
 
                 if (erroresEncontrados.Any())
@@ -695,7 +727,7 @@ namespace GenReports.business
         /// <param name="reportType">Tipo de reporte</param>
         /// <param name="userName">Usuario que genera el reporte</param>
         /// <returns>ArchivoResult con el archivo ZIP que contiene los PDFs divididos</returns>
-        public async Task<ArchivoResult> ExecuteConsolidatedReportWithSplit(string jsonString, string reportType, string userName = "SYSTEM")
+        public async Task<ArchivoResult> ExecuteConsolidatedReportWithSplit(string jsonString, string reportType, string userName = "SYSTEM", Action<int, int, string>? onProgress = null)
         {
             try
             {
@@ -703,44 +735,131 @@ namespace GenReports.business
 
                 // Parsear el JSON para extraer la data
                 var reportData = ExtractDataFromJson(jsonString);
+                var total = reportData.Count;
 
-                Console.WriteLine($"Generando reporte consolidado con {reportData.Count} registros");
+                // Lógica de batching configurable para evitar sobrecarga de memoria / índices fuera de rango
+                var batchSize = (_reportsConfig?.ConsolidatedSplitBatchSize ?? 0) > 0
+                    ? _reportsConfig.ConsolidatedSplitBatchSize
+                    : int.MaxValue;
 
-                // PASO 1: Generar un PDF consolidado reutilizando GenerateConsolidatedReport
-                // Generamos el PDF consolidado usando el generador de Telerik existente
-                var reporteConsolidado = GenerateTelerik(reportData, reportType, userName);
-
-                Console.WriteLine($"PDF consolidado generado exitosamente. Tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
-
-                // Verificar el número de páginas del PDF consolidado para información
-                try
+                if (total > batchSize)
                 {
-                    using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
-                    using var fileSourceVerify = new PdfFileSource(verifyStream);
-                    var consolidatedPages = fileSourceVerify.Pages.Length;
-                    Console.WriteLine($"PDF consolidado contiene {consolidatedPages} páginas para {reportData.Count} registros.");
+                    Console.WriteLine($"Procesamiento en lotes activado: batchSize={batchSize}, totalRegistros={total}");
+                    var aggregateEntries = new List<ArchiveEntry>();
+
+                    int processed = 0;
+                    int batchIndex = 0;
+                    while (processed < total)
+                    {
+                        var size = Math.Min(batchSize, total - processed);
+                        var batchData = reportData.Skip(processed).Take(size).ToList();
+
+                        Console.WriteLine($"[Batch] Generando consolidado para lote {batchIndex + 1} de tamaño {size} (offset {processed})");
+                        var reporteConsolidado = GenerateTelerik(batchData, reportType, userName);
+                        Console.WriteLine($"[Batch] PDF consolidado (lote {batchIndex + 1}) tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
+
+                        var prefix = $"B{(batchIndex + 1):D3}_";
+                        // Llenar el acumulador de entradas SIN comprimir por lote
+                        await SplitPdfIntoIndividualFilesTelerik(
+                            reporteConsolidado.BytesArchivo,
+                            size,
+                            userName,
+                            aggregateEntries,
+                            prefix,
+                            returnCompressed: false
+                        );
+
+                        processed += size;
+                        batchIndex++;
+                        try { onProgress?.Invoke(processed, total, "split-batch"); } catch { }
+                    }
+
+                    // Comprimir una sola vez con todas las entradas acumuladas
+                    var compressor = new ArchiveCompressor();
+                    var buildAgg = await compressor.CreateArchivePrefer7zAsync(aggregateEntries);
+                    var nombreZipAgg = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{buildAgg.Extension}";
+
+                    var archivoAgg = new ArchivoResult
+                    {
+                        NombreArchivo = nombreZipAgg,
+                        BytesArchivo = buildAgg.Bytes,
+                        Usuario = userName,
+                        FechaGeneracion = DateTime.Now
+                    };
+
+                    Console.WriteLine($"Archivo comprimido (batched) con split generado exitosamente: {nombreZipAgg}, Tamaño: {archivoAgg.BytesArchivo.Length} bytes");
+                    return archivoAgg;
                 }
-                catch (Exception ex)
+                else
                 {
-                    Console.WriteLine($"No se pudo verificar el número de páginas del consolidado: {ex.Message}. Continuando con split por páginas.");
+                    Console.WriteLine($"Generando reporte consolidado con {total} registros");
+
+                    // PASO 1: Generar un PDF consolidado reutilizando GenerateConsolidatedReport
+                    var reporteConsolidado = GenerateTelerik(reportData, reportType, userName);
+                    Console.WriteLine($"PDF consolidado generado exitosamente. Tamaño: {reporteConsolidado.BytesArchivo.Length} bytes");
+
+                    // Verificar el número de páginas del PDF consolidado para información
+                    try
+                    {
+                        using var verifyStream = new MemoryStream(reporteConsolidado.BytesArchivo);
+                        using var fileSourceVerify = new PdfFileSource(verifyStream);
+                        var consolidatedPages = fileSourceVerify.Pages.Length;
+                        Console.WriteLine($"PDF consolidado contiene {consolidatedPages} páginas para {total} registros.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"No se pudo verificar el número de páginas del consolidado: {ex.Message}. Continuando con split por páginas.");
+                    }
+
+                    // Si supera el umbral, usar escritura a disco y compresión desde directorio
+                    var threshold = (_reportsConfig?.ConsolidatedSplitDiskThreshold ?? 10000);
+                    var useDisk = total > threshold;
+                    if (useDisk)
+                    {
+                        var tempRoot = Path.Combine(Path.GetTempPath(), "GenReports_Split");
+                        Directory.CreateDirectory(tempRoot);
+                        var jobDir = Path.Combine(tempRoot, $"{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}");
+                        Directory.CreateDirectory(jobDir);
+
+                        await SplitPdfToDirectoryTelerik(reporteConsolidado.BytesArchivo, total, jobDir, userName);
+
+                        var compressor = new ArchiveCompressor();
+                        var buildDisk = await compressor.CreateArchiveFromDirectoryPrefer7zAsync(jobDir);
+                        var nombreArchivoZipDisk = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{buildDisk.Extension}";
+
+                        var archivoComprimidoDisk = new ArchivoResult
+                        {
+                            NombreArchivo = nombreArchivoZipDisk,
+                            BytesArchivo = buildDisk.Bytes,
+                            Usuario = userName,
+                            FechaGeneracion = DateTime.Now
+                        };
+
+                        try { onProgress?.Invoke(total, total, "split-disk"); } catch { }
+                        try { Directory.Delete(jobDir, true); } catch (Exception cleanupEx) { Console.WriteLine($"[Disk] No se pudo eliminar el directorio temporal '{jobDir}': {cleanupEx.Message}"); }
+
+                        Console.WriteLine($"Archivo comprimido (disk) con split generado exitosamente: {nombreArchivoZipDisk}, Tamaño: {archivoComprimidoDisk.BytesArchivo.Length} bytes");
+                        return archivoComprimidoDisk;
+                    }
+
+                    // PASO 2: Dividir el PDF consolidado en archivos individuales y comprimir (memoria)
+                    var build = await SplitPdfIntoIndividualFilesTelerik(reporteConsolidado.BytesArchivo, total, userName);
+
+                    var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
+
+                    var archivoComprimido = new ArchivoResult
+                    {
+                        NombreArchivo = nombreArchivoZip,
+                        BytesArchivo = build.Bytes,
+                        Usuario = userName,
+                        FechaGeneracion = DateTime.Now
+                    };
+
+                    try { onProgress?.Invoke(total, total, "split"); } catch { }
+
+                    Console.WriteLine($"Archivo comprimido con split generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
+                    return archivoComprimido;
                 }
-
-                // PASO 2: Dividir el PDF consolidado en archivos individuales
-                var build = await SplitPdfIntoIndividualFilesTelerik(reporteConsolidado.BytesArchivo, reportData.Count, userName);
-
-                var nombreArchivoZip = $"Reportes_{reportType}_ConsolidatedSplit_{DateTime.Now:yyyyMMdd_HHmmss}.{build.Extension}";
-
-                var archivoComprimido = new ArchivoResult
-                {
-                    NombreArchivo = nombreArchivoZip,
-                    BytesArchivo = build.Bytes,
-                    Usuario = userName,
-                    FechaGeneracion = DateTime.Now
-                };
-
-                Console.WriteLine($"Archivo comprimido con split generado exitosamente: {nombreArchivoZip}, Tamaño: {archivoComprimido.BytesArchivo.Length} bytes");
-
-                return archivoComprimido;
             }
             catch (Exception ex)
             {
@@ -756,7 +875,13 @@ namespace GenReports.business
         /// <param name="recordCount">Número de registros (para validación)</param>
         /// <param name="userName">Nombre del usuario</param>
         /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
-        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFiles(byte[] consolidatedPdfBytes, int recordCount, string userName)
+        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFiles(
+            byte[] consolidatedPdfBytes,
+            int recordCount,
+            string userName,
+            List<ArchiveEntry>? aggregateEntries = null,
+            string? fileNamePrefix = null,
+            bool returnCompressed = true)
         {
             throw new NotSupportedException("Este método ha sido reemplazado por SplitPdfIntoIndividualFilesTelerik y ya no está disponible.");
         }
@@ -767,8 +892,17 @@ namespace GenReports.business
         /// <param name="consolidatedPdfBytes">Bytes del PDF consolidado</param>
         /// <param name="recordCount">Número de registros (para validación)</param>
         /// <param name="userName">Nombre del usuario</param>
-        /// <returns>Bytes del archivo ZIP con los PDFs individuales</returns>
-        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFilesTelerik(byte[] consolidatedPdfBytes, int recordCount, string userName)
+        /// <param name="aggregateEntries">Acumulador opcional de entradas; si se proporciona, las entradas se agregan aquí</param>
+        /// <param name="fileNamePrefix">Prefijo opcional para nombres de archivo (p.ej., por lote)</param>
+        /// <param name="returnCompressed">Si es true, devuelve un archivo comprimido; si es false, solo llena aggregateEntries</param>
+        /// <returns>Resultado de compresión o vacío si returnCompressed=false</returns>
+        private async Task<ArchiveBuildResult> SplitPdfIntoIndividualFilesTelerik(
+            byte[] consolidatedPdfBytes,
+            int recordCount,
+            string userName,
+            List<ArchiveEntry>? aggregateEntries = null,
+            string? fileNamePrefix = null,
+            bool returnCompressed = true)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
@@ -782,6 +916,7 @@ namespace GenReports.business
                 Console.WriteLine($"[Telerik] PDF consolidado tiene {totalPages} páginas. Registros esperados: {recordCount}");
 
                 var entries = new List<ArchiveEntry>();
+                var prefix = string.IsNullOrEmpty(fileNamePrefix) ? string.Empty : fileNamePrefix;
 
                 // 1) Intentar dividir por Bookmarks (Document Map)
                 RadFixedDocument? fixedDoc = null;
@@ -852,7 +987,7 @@ namespace GenReports.business
                         }
 
                         var baseName = string.IsNullOrWhiteSpace(bookmarkStarts[i].title) ? $"Registro_{i + 1:D4}" : SanitizeFileName(bookmarkStarts[i].title);
-                        var nombreArchivo = $"{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                        var nombreArchivo = $"{prefix}{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
                         entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
                         Console.WriteLine($"[Telerik] Rango {start + 1}-{end + 1} preparado como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
                     }
@@ -881,7 +1016,7 @@ namespace GenReports.business
                                 continue;
                             }
 
-                            var nombreArchivo = $"Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
+                            var nombreArchivo = $"{prefix}Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
                             entries.Add(new ArchiveEntry(nombreArchivo, individualPdfBytes));
                             Console.WriteLine($"[Telerik] Página {pageIndex + 1} preparada como {nombreArchivo} ({individualPdfBytes.Length} bytes)");
                         }
@@ -890,6 +1025,18 @@ namespace GenReports.business
                             Console.WriteLine($"[Telerik] Error procesando página {pageIndex + 1}: {ex.Message}");
                         }
                     }
+                }
+
+                // Si se pasa un acumulador y no se requiere devolver comprimido, agregar entradas y salir
+                if (aggregateEntries != null)
+                {
+                    aggregateEntries.AddRange(entries);
+                }
+                if (!returnCompressed)
+                {
+                    sw.Stop();
+                    Console.WriteLine($"[Telerik] Split completado. {entries.Count} entradas agregadas al acumulador. Sin compresión en este paso.");
+                    return new ArchiveBuildResult { Bytes = Array.Empty<byte>(), Extension = "zip", UsedSevenZip = false };
                 }
 
                 var compressor = new ArchiveCompressor();
@@ -903,6 +1050,13 @@ namespace GenReports.business
                 sw.Stop();
                 Console.WriteLine($"[Telerik] Error en SplitPdfIntoIndividualFilesTelerik tras {sw.Elapsed}: {ex.Message}");
                 Console.WriteLine($"[Telerik] StackTrace: {ex.StackTrace}");
+
+                // Fallback: si estamos en modo acumulador sin compresión, agregar el PDF consolidado al acumulador
+                if (aggregateEntries != null && !returnCompressed)
+                {
+                    aggregateEntries.Add(new ArchiveEntry($"ReporteConsolidado_Fallback_{DateTime.Now:yyyyMMdd_HHmmss}.pdf", consolidatedPdfBytes));
+                    return new ArchiveBuildResult { Bytes = Array.Empty<byte>(), Extension = "zip", UsedSevenZip = false };
+                }
 
                 // Fallback: devolver ZIP con el PDF consolidado
                 var compressor = new ArchiveCompressor();
@@ -1011,6 +1165,141 @@ namespace GenReports.business
             // Evitar nombres extremadamente largos
             if (sanitized.Length > 120) sanitized = sanitized.Substring(0, 120);
             return string.IsNullOrWhiteSpace(sanitized) ? "Archivo" : sanitized;
+        }
+
+        private async Task SplitPdfToDirectoryTelerik(byte[] consolidatedPdfBytes, int recordCount, string outputDir, string userName)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                if (!Directory.Exists(outputDir))
+                {
+                    Directory.CreateDirectory(outputDir);
+                }
+
+                Console.WriteLine($"[Telerik-Disk] Iniciando split directo a disco. Bytes={consolidatedPdfBytes.Length}, Registros={recordCount}, Dir='{outputDir}'");
+
+                using var inputStream = new MemoryStream(consolidatedPdfBytes);
+                using var fileSource = new PdfFileSource(inputStream);
+
+                int totalPages = fileSource.Pages.Length;
+
+                RadFixedDocument? fixedDoc = null;
+                List<(string title, int pageIndex)> bookmarkStarts = new();
+                try
+                {
+                    using var importStream = new MemoryStream(consolidatedPdfBytes);
+                    var provider = new PdfFormatProvider();
+                    fixedDoc = provider.Import(importStream);
+                    bookmarkStarts = GetBookmarkStartPages(fixedDoc);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Telerik-Disk] No fue posible leer bookmarks: {ex.Message}. Continuando con fallback por página si aplica.");
+                }
+
+                int generated = 0;
+                string prefix = string.Empty;
+
+                if (bookmarkStarts.Count > 0 && fixedDoc != null)
+                {
+                    Console.WriteLine($"[Telerik-Disk] {bookmarkStarts.Count} bookmarks detectados. Dividiendo por rangos...");
+
+                    for (int i = 0; i < bookmarkStarts.Count; i++)
+                    {
+                        var start = bookmarkStarts[i].pageIndex;
+                        var end = (i < bookmarkStarts.Count - 1) ? bookmarkStarts[i + 1].pageIndex - 1 : totalPages - 1;
+
+                        if (start < 0 || start >= totalPages || end < start)
+                        {
+                            Console.WriteLine($"[Telerik-Disk] Rango inválido {start}-{end}. Se omite.");
+                            continue;
+                        }
+
+                        var baseName = string.IsNullOrWhiteSpace(bookmarkStarts[i].title) ? $"Registro_{i + 1:D4}" : SanitizeFileName(bookmarkStarts[i].title);
+                        var fileName = Path.Combine(outputDir, $"{prefix}{baseName}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf");
+
+                        // Primero construir en memoria para validar tamaño y luego escribir a disco
+                        using var ms = new MemoryStream();
+                        using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                        {
+                            for (int p = start; p <= end; p++)
+                            {
+                                var srcPage = fixedDoc.Pages[p];
+                                using var pageWriter = writer.BeginPage(srcPage.Size, srcPage.Rotation);
+                                pageWriter.WriteContent(srcPage);
+                            }
+                        }
+
+                        var bytes = ms.ToArray();
+
+                        if (bytes.Length < 1024)
+                        {
+                            ms.SetLength(0);
+                            using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                            {
+                                for (int p = start; p <= end; p++)
+                                {
+                                    var pageSource = fileSource.Pages[p];
+                                    writer.WritePage(pageSource);
+                                }
+                            }
+                            bytes = ms.ToArray();
+                        }
+
+                        if (bytes.Length == 0)
+                        {
+                            Console.WriteLine($"[Telerik-Disk] Advertencia: El rango {start + 1}-{end + 1} resultó vacío.");
+                            continue;
+                        }
+
+                        await File.WriteAllBytesAsync(fileName, bytes);
+                        generated++;
+                        if (generated % 100 == 0) { try { Console.WriteLine($"[Telerik-Disk] Generados {generated} archivos..."); } catch { } }
+                    }
+                }
+
+                if (generated == 0)
+                {
+                    Console.WriteLine("[Telerik-Disk] No se generaron archivos por bookmarks. Aplicando split por página...");
+                    for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
+                    {
+                        try
+                        {
+                            using var ms = new MemoryStream();
+                            using (var writer = new PdfStreamWriter(ms, leaveStreamOpen: true))
+                            {
+                                var pageSource = fileSource.Pages[pageIndex];
+                                writer.WritePage(pageSource);
+                            }
+
+                            var bytes = ms.ToArray();
+                            if (bytes.Length == 0)
+                            {
+                                Console.WriteLine($"[Telerik-Disk] Advertencia: La página {pageIndex + 1} resultó vacía.");
+                                continue;
+                            }
+
+                            var fileName = Path.Combine(outputDir, $"{prefix}Reporte_Pagina_{(pageIndex + 1):D4}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf");
+                            await File.WriteAllBytesAsync(fileName, bytes);
+                            generated++;
+                            if (generated % 100 == 0) { try { Console.WriteLine($"[Telerik-Disk] Generados {generated} archivos..."); } catch { } }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Telerik-Disk] Error procesando página {pageIndex + 1}: {ex.Message}");
+                        }
+                    }
+                }
+
+                sw.Stop();
+                Console.WriteLine($"[Telerik-Disk] Split a disco completado. Archivos generados: {generated}. Tiempo: {sw.Elapsed}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Telerik-Disk] Error en SplitPdfToDirectoryTelerik: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
         }
     }
 

@@ -506,6 +506,8 @@ namespace GenReports.Controllers
             }
         }
 
+
+
         // Helper local para leer propiedades de forma case-insensitive
         private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
         {

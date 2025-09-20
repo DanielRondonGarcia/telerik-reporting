@@ -108,7 +108,7 @@ telerik-reporting/
 4. Ejecutar el contenedor exponiendo los puertos 8080 y 8081:
 
    ```bash
-   docker run -d --rm --name genreports -p 8080:8080 -p 8081:8081 genreports:prod
+   docker run -d --rm --name genreports -p 5222:8080 -p 8081:8081 genreports:prod
    ```
 
 5. La aplicación usará automáticamente `/app/reports/` como ruta base

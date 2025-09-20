@@ -16,12 +16,13 @@ WORKDIR /app
 # Cambiar temporalmente a root para instalar dependencias y crear directorios
 USER root
 
-# Instalar dependencias de Linux necesarias para Telerik Reporting con SkiaSharp
+# Instalar dependencias de Linux necesarias para Telerik Reporting con SkiaSharp y 7z
 RUN apt-get update \
     && apt-get install -y --allow-unauthenticated \
     libc6-dev \
     libfreetype6 \
     libfontconfig1 \
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorios necesarios

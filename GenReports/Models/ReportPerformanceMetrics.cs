@@ -56,6 +56,11 @@ namespace GenReports.Models
         public double AverageTimePerRecordMs { get; set; }
 
         /// <summary>
+        /// Registros por segundo (r/s) calculados
+        /// </summary>
+        public double RecordsPerSecond { get; set; }
+
+        /// <summary>
         /// Tiempo de compresión del archivo final en milisegundos
         /// </summary>
         public long CompressionTimeMs { get; set; }
@@ -99,7 +104,13 @@ namespace GenReports.Models
         {
             if (RecordsProcessed > 0)
             {
-                AverageTimePerRecordMs = (double)ReportGenerationTimeMs / RecordsProcessed;
+                // Prioriza el tiempo de generación si está disponible, si no usa el total
+                var baseMs = ReportGenerationTimeMs > 0 ? ReportGenerationTimeMs : TotalExecutionTimeMs;
+                if (baseMs > 0)
+                {
+                    AverageTimePerRecordMs = (double)baseMs / RecordsProcessed;
+                    RecordsPerSecond = RecordsProcessed / (baseMs / 1000.0);
+                }
             }
 
             if (FilesGenerated > 0 && SplitTotalTimeMs > 0)
@@ -114,7 +125,7 @@ namespace GenReports.Models
         public string GetSummary()
         {
             return $"Total: {TotalExecutionTimeMs}ms | " +
-                   $"Generación: {ReportGenerationTimeMs}ms ({AverageTimePerRecordMs:F2}ms/registro) | " +
+                   $"Generación: {ReportGenerationTimeMs}ms ({AverageTimePerRecordMs:F2}ms/registro, {RecordsPerSecond:F2} r/s) | " +
                    $"Split: {SplitTotalTimeMs}ms ({SplitAverageTimePerFileMs:F2}ms/archivo) | " +
                    $"Archivos: {FilesGenerated} | Registros: {RecordsProcessed}";
         }
