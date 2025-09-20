@@ -22,10 +22,23 @@ COPY ["GenReports/nuget.config", "GenReports/"]
 # Configurar la variable de entorno para NuGet antes de restore
 ENV TELERIK_NUGET_KEY=$TELERIK_NUGET_KEY
 
-RUN dotnet restore "./GenReports/GenReports.csproj"
-COPY . ./GenReports/
+# Crear un nuget.config temporal si no hay clave de Telerik
+RUN if [ -z "$TELERIK_NUGET_KEY" ]; then \
+        echo "No Telerik key provided, creating temporary nuget.config for public sources only"; \
+        echo '<?xml version="1.0" encoding="utf-8"?>' > ./GenReports/nuget.temp.config; \
+        echo '<configuration>' >> ./GenReports/nuget.temp.config; \
+        echo '  <packageSources>' >> ./GenReports/nuget.temp.config; \
+        echo '    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />' >> ./GenReports/nuget.temp.config; \
+        echo '  </packageSources>' >> ./GenReports/nuget.temp.config; \
+        echo '</configuration>' >> ./GenReports/nuget.temp.config; \
+        dotnet restore "./GenReports/GenReports.csproj" --configfile ./GenReports/nuget.temp.config --ignore-failed-sources; \
+    else \
+        echo "Using Telerik private feed"; \
+        dotnet restore "./GenReports/GenReports.csproj"; \
+    fi
+COPY GenReports/ ./GenReports/
 WORKDIR "/src/GenReports"
-RUN dotnet build "./GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/build
+RUN dotnet build "GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 # Esta fase se usa para publicar el proyecto de servicio que se copiará en la fase final.
 FROM build AS publish
@@ -40,7 +53,7 @@ RUN if [ ! -z "$TELERIK_LICENSE_KEY" ]; then \
         echo "Build público sin licencia de Telerik"; \
     fi
 
-RUN dotnet publish "./GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
 
 # Esta fase se usa en producción o cuando se ejecuta desde VS en modo normal (valor predeterminado cuando no se usa la configuración de depuración)
 FROM base AS final
