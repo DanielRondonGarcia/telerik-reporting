@@ -16,8 +16,8 @@ ARG TELERIK_NUGET_KEY=""
 # Argumento para la licencia de Telerik (opcional, solo para despliegue)
 ARG TELERIK_LICENSE_KEY=""
 WORKDIR /src
-COPY ["GenReports.csproj", "GenReports/"]
-COPY ["nuget.config", "GenReports/"]
+COPY ["GenReports/GenReports.csproj", "GenReports/"]
+COPY ["GenReports/nuget.config", "GenReports/"]
 
 # Configurar la variable de entorno para NuGet antes de restore
 ENV TELERIK_NUGET_KEY=$TELERIK_NUGET_KEY
