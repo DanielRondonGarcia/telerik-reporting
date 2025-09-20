@@ -94,9 +94,12 @@ jobs:
           dotnet tool update dotnet-sonarscanner --tool-path .\.sonar\scanner
       - name: Build and analyze
         shell: powershell
+        env:
+          TELERIK_NUGET_KEY: ${{ secrets.TELERIK_NUGET_KEY }}
         run: |
           .\.sonar\scanner\dotnet-sonarscanner begin /k:"DanielRondonGarcia_telerik-reporting_e9f4aa52-b4db-40a8-947f-6afbc368d410" /d:sonar.token="${{ secrets.SONAR_TOKEN }}" /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}"
-          dotnet build
+          dotnet restore --configfile GenReports/nuget.config
+          dotnet build --no-restore
           .\.sonar\scanner\dotnet-sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
 
   # Job 3: SCA - Software Composition Analysis with Trivy
@@ -110,7 +113,10 @@ jobs:
       - name: Build an image from Dockerfile
         run: |
           IMAGE_TAG=$(echo "${{ needs.build-and-test.outputs.image-tag }}" | head -n1)
-          docker build -f GenReports/Dockerfile -t "${IMAGE_TAG}" .
+          docker build -f GenReports/Dockerfile -t "${IMAGE_TAG}" \
+            --build-arg TELERIK_NUGET_KEY="${{ secrets.TELERIK_NUGET_KEY }}" \
+            --build-arg TELERIK_LICENSE_KEY="${{ secrets.TELERIK_LICENSE_KEY }}" \
+            .
 
       - name: Set image tag for Trivy scan
         id: set-tag

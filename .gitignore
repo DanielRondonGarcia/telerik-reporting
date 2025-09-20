@@ -64,4 +64,4 @@ nunit-*.xml
 GenReports/GenReports.csproj.user
 
 # Telerik report files with sensitive data
-*.trdp
+#*.trdp

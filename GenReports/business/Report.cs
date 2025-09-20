@@ -76,7 +76,7 @@ namespace GenReports.business
         {
             return reportType?.ToUpper() switch
             {
-                "USUARIO" => "GEN_INFO_USUARIO_T.json.batch.trdp",
+                "USUARIO" => "GET_USERS_DATA.trdp",
                 "USUARIO_MASIVO" => "GEN_INFO_USUARIO_MASIVO_T.trdp",
                 _ => throw new ArgumentException($"Tipo de reporte no soportado: {reportType}")
             };
