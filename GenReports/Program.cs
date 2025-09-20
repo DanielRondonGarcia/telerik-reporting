@@ -16,6 +16,9 @@ builder.Services.Configure<ReportsConfiguration>(
 // Registrar servicio de caché temporal
 builder.Services.AddSingleton<ITemporaryFileCacheService, TemporaryFileCacheService>();
 
+// Registrar servicio de claves de caché globales
+builder.Services.AddSingleton<IGlobalCacheKeyService, GlobalCacheKeyService>();
+
 // Registrar servicio de reportes
 builder.Services.AddScoped<GenReports.business.Report>();
 

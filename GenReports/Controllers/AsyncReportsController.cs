@@ -22,15 +22,18 @@ namespace GenReports.Controllers
     {
         private readonly ReportQueueService _queueService;
         private readonly ITemporaryFileCacheService _cacheService;
+        private readonly IGlobalCacheKeyService _globalCacheKeyService;
         private readonly ILogger<AsyncReportsController> _logger;
 
         public AsyncReportsController(
             ReportQueueService queueService,
             ITemporaryFileCacheService cacheService,
+            IGlobalCacheKeyService globalCacheKeyService,
             ILogger<AsyncReportsController> logger)
         {
             _queueService = queueService;
             _cacheService = cacheService;
+            _globalCacheKeyService = globalCacheKeyService;
             _logger = logger;
         }
 
@@ -64,12 +67,12 @@ namespace GenReports.Controllers
                 using var reader = new StreamReader(dataFile.OpenReadStream());
                 var jsonData = await reader.ReadToEndAsync();
 
-                // --- Lógica de Caché ---
-                var requestHash = CreateRequestCacheHash(reportType, mode, jsonData);
-                var cachedFile = await _cacheService.FindByMD5HashAsync(requestHash);
+                // --- Lógica de Caché Global ---
+                var globalCacheKey = _globalCacheKeyService.GenerateContentBasedCacheKey(jsonData);
+                var cachedFile = await _cacheService.FindByMD5HashAsync(globalCacheKey);
                 if (cachedFile != null)
                 {
-                    _logger.LogInformation("Reporte encontrado en caché para el hash {RequestHash}. Devolviendo resultado directamente.", requestHash);
+                    _logger.LogInformation("Reporte encontrado en caché global para el contenido JSON. Hash: {GlobalCacheKey}. Devolviendo resultado directamente.", globalCacheKey);
                     var cachedResponse = new ApiResponse<CachedReportResponse>
                     {
                         Success = true,
@@ -80,7 +83,7 @@ namespace GenReports.Controllers
 
                 // --- Encolar el Trabajo ---
                 var jobId = Guid.NewGuid().ToString();
-                _queueService.EnqueueReportJob(jobId, jsonData, reportType, userName, true, mode, requestHash);
+                _queueService.EnqueueReportJob(jobId, jsonData, reportType, userName, true, mode, globalCacheKey);
                 _logger.LogInformation("Reporte encolado con JobId {JobId} para el usuario {UserName}, modo: {ProcessingMode}", jobId, userName, mode);
                 
                 var statusUrl = Url.Action(nameof(GetJobStatus), new { jobId });
@@ -157,14 +160,7 @@ namespace GenReports.Controllers
             return Url.Action("DownloadFile", "Download", new { token }, Request.Scheme);
         }
 
-        private string CreateRequestCacheHash(string reportType, string mode, string jsonData)
-        {
-            using var md5 = MD5.Create();
-            var jsonHashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(jsonData));
-            var combinedKey = $"{reportType}|{mode}|{Convert.ToHexString(jsonHashBytes)}";
-            var requestHashBytes = md5.ComputeHash(Encoding.UTF8.GetBytes(combinedKey));
-            return Convert.ToHexString(requestHashBytes).ToLowerInvariant();
-        }
+
 
         private IActionResult? ValidateQueueRequest(IFormFile dataFile, string processingMode)
         {

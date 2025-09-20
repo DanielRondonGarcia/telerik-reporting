@@ -18,15 +18,18 @@ namespace GenReports.Controllers
     public class ReportesController : ControllerBase
     {
         private readonly ITemporaryFileCacheService _cacheService;
+        private readonly IGlobalCacheKeyService _globalCacheKeyService;
         private readonly Report _reportService;
         private readonly ILogger<ReportesController> _logger; // 2. Inyectar ILogger
 
         public ReportesController(
             ITemporaryFileCacheService cacheService,
+            IGlobalCacheKeyService globalCacheKeyService,
             Report reportService,
             ILogger<ReportesController> logger) // Inyectar en el constructor
         {
             _cacheService = cacheService;
+            _globalCacheKeyService = globalCacheKeyService;
             _reportService = reportService;
             _logger = logger;
         }
@@ -138,18 +141,19 @@ namespace GenReports.Controllers
 
             try
             {
-                var inputHash = CalculateMD5Hash($"{jsonString}_{reportType}_{userName}_{cacheKeySuffix}");
-                _logger.LogInformation("Hash MD5 de entrada calculado: {InputHash}", inputHash);
+                // Usar caché global basado únicamente en el contenido JSON
+                var globalCacheKey = _globalCacheKeyService.GenerateContentBasedCacheKey(jsonString);
+                _logger.LogInformation("Clave de caché global calculada: {GlobalCacheKey}", globalCacheKey);
 
-                // 1. Verificar si ya existe en caché
-                var cachedFile = await _cacheService.FindByMD5HashAsync(inputHash);
+                // 1. Verificar si ya existe en caché global
+                var cachedFile = await _cacheService.FindByMD5HashAsync(globalCacheKey);
                 if (cachedFile != null)
                 {
                     stopwatch.Stop();
-                    _logger.LogInformation("Archivo encontrado en caché: {FileName}. Proceso completado en {ElapsedMilliseconds}ms.",
+                    _logger.LogInformation("Archivo encontrado en caché global: {FileName}. Proceso completado en {ElapsedMilliseconds}ms.",
                         cachedFile.OriginalFileName, stopwatch.ElapsedMilliseconds);
                     
-                    return Ok(CreateCachedApiResponse(cachedFile, inputHash));
+                    return Ok(CreateCachedApiResponse(cachedFile, globalCacheKey));
                 }
 
                 _logger.LogInformation("Archivo no encontrado en caché. Generando nuevo reporte...");
@@ -161,19 +165,19 @@ namespace GenReports.Controllers
                     throw new InvalidOperationException("El servicio de reportes no devolvió ningún contenido.");
                 }
 
-                // 3. Almacenar en caché y crear la respuesta
+                // 3. Almacenar en caché global y crear la respuesta
                 var contentType = UFile.GetContentTypeFromFileName(fileOutput.NombreArchivo);
                 var tempFileInfo = await _cacheService.StoreFileAsync(
                     fileOutput.BytesArchivo,
                     fileOutput.NombreArchivo,
                     contentType,
-                    inputHash
+                    globalCacheKey
                 );
 
                 stopwatch.Stop();
-                _logger.LogInformation("Reporte generado y almacenado exitosamente en {ElapsedMilliseconds}ms.", stopwatch.ElapsedMilliseconds);
+                _logger.LogInformation("Reporte generado y almacenado exitosamente en caché global en {ElapsedMilliseconds}ms.", stopwatch.ElapsedMilliseconds);
 
-                return Ok(CreateSuccessApiResponse(tempFileInfo, inputHash, stopwatch.ElapsedMilliseconds));
+                return Ok(CreateSuccessApiResponse(tempFileInfo, globalCacheKey, stopwatch.ElapsedMilliseconds));
             }
             catch (Exception ex)
             {
@@ -218,13 +222,7 @@ namespace GenReports.Controllers
             }
         }
 
-        private string CalculateMD5Hash(string input)
-        {
-            using var md5 = MD5.Create();
-            var inputBytes = System.Text.Encoding.UTF8.GetBytes(input);
-            var hashBytes = md5.ComputeHash(inputBytes);
-            return Convert.ToHexString(hashBytes).ToLowerInvariant();
-        }
+
 
         private static bool TryGetPropertyCaseInsensitive(JsonElement element, string propertyName, out JsonElement value)
         {
