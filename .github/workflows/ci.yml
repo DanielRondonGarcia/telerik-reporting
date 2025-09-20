@@ -13,7 +13,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/devsecops
+  IMAGE_NAME: ${{ github.repository_owner }}/telerik-reporting
 
 jobs:
   # Job 1: Build and Test
