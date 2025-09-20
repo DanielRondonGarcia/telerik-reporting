@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genreports-config
+  labels:
+    app: genreports-api
+data:
+  # Configuración de la aplicación
+  ASPNETCORE_ENVIRONMENT: "Docker"
+  ASPNETCORE_HTTP_PORTS: "8080"
+  ASPNETCORE_HTTPS_PORTS: "8081"
+  
+  # Configuración de logging
+  Logging__LogLevel__Default: "Information"
+  Logging__LogLevel__Microsoft.AspNetCore: "Warning"
+  
+  # Configuración de Swagger
+  SwaggerUI__Enabled: "true"
+  
+  # Configuración de CORS (si es necesario)
+  AllowedHosts: "*"
+  
+  # Configuración específica de Telerik Reporting
+  ReportsPath: "/app/reports"
+  
+  # Configuración de cache temporal
+  TemporaryFileCache__MaxSizeInMB: "100"
+  TemporaryFileCache__CleanupIntervalMinutes: "30"
+---

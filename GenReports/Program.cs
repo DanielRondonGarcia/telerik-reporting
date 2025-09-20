@@ -81,11 +81,20 @@ Console.WriteLine("Using Skia graphics engine for Telerik Reporting on Linux");
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
+// Habilitar Swagger en todos los entornos para monitoreo y health checks
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "GenReports API v1");
+    c.RoutePrefix = "swagger"; // Swagger estará disponible en /swagger
+    
+    // En producción, configurar opciones adicionales de seguridad si es necesario
+    if (!app.Environment.IsDevelopment())
+    {
+        c.DocumentTitle = "GenReports API - Production";
+        // Opcional: Agregar autenticación básica o restricciones de IP aquí
+    }
+});
 
 app.UseHttpsRedirection();
 

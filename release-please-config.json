@@ -1,0 +1,20 @@
+{
+  "package-name": "ci-cd",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "release-type": "node"
+    }
+  },
+  "changelog-sections": [
+    {"type":"feat","section":"Features","hidden":false},
+    {"type":"fix","section":"Bug Fixes","hidden":false},
+    {"type":"chore","section":"Chores","hidden":false},
+    {"type":"docs","section":"Documentation","hidden":false},
+    {"type":"style","section":"Styling","hidden":false},
+    {"type":"refactor","section":"Refactors","hidden":false},
+    {"type":"perf","section":"Performance","hidden":false},
+    {"type":"test","section":"Tests","hidden":false}
+  ]
+}

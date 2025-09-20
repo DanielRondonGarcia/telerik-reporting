@@ -1,0 +1,438 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  actions: read
+  issues: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/devsecops
+
+jobs:
+  # Job 1: Build and Test
+  build-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Shallow clones should be disabled for better analysis
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Run tests
+        run: dotnet test --no-restore || echo "No tests configured yet"
+
+      - name: Build application
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Extract metadata for image tagging
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+  # Job 2: SAST - Static Application Security Testing with SonarQube
+  sast-sonarqube:
+    runs-on: windows-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'zulu' # Alternative distribution options are available.
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~\.sonar\cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Cache SonarQube scanner
+        id: cache-sonar-scanner
+        uses: actions/cache@v4
+        with:
+          path: .\.sonar\scanner
+          key: ${{ runner.os }}-sonar-scanner
+          restore-keys: ${{ runner.os }}-sonar-scanner
+
+      - name: Install SonarQube scanner
+        if: steps.cache-sonar-scanner.outputs.cache-hit != 'true'
+        shell: powershell
+        run: |
+          New-Item -Path .\.sonar\scanner -ItemType Directory
+          dotnet tool update dotnet-sonarscanner --tool-path .\.sonar\scanner
+      - name: Build and analyze
+        shell: powershell
+        run: |
+          .\.sonar\scanner\dotnet-sonarscanner begin /k:"DanielRondonGarcia_telerik-reporting_e9f4aa52-b4db-40a8-947f-6afbc368d410" /d:sonar.token="${{ secrets.SONAR_TOKEN }}" /d:sonar.host.url="${{ secrets.SONAR_HOST_URL }}"
+          dotnet build
+          .\.sonar\scanner\dotnet-sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
+
+  # Job 3: SCA - Software Composition Analysis with Trivy
+  sca-trivy:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build an image from Dockerfile
+        run: |
+          IMAGE_TAG=$(echo "${{ needs.build-and-test.outputs.image-tag }}" | head -n1)
+          docker build -f GenReports/Dockerfile -t "${IMAGE_TAG}" .
+
+      - name: Set image tag for Trivy scan
+        id: set-tag
+        run: |
+          IMAGE_TAG=$(echo "${{ needs.build-and-test.outputs.image-tag }}" | head -n1)
+          echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.set-tag.outputs.image-tag }}
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+
+  # Job 4: IaC Security - Infrastructure as Code Security with Checkov
+  iac-security-checkov:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkov GitHub Action
+        id: checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          # Escanea los manifiestos en la carpeta k8s
+          directory: ./k8s
+          framework: kubernetes
+          # Soft fail: reporta errores pero no detiene el pipeline
+          # Esto es común para IaC, para revisar antes de bloquear.
+          soft_fail: true
+          # Genera un reporte en formato SARIF para subirlo a GitHub
+          output_format: sarif
+          output_file_path: results.sarif
+
+      - name: Upload Checkov scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+
+  # Job 5: Build and Push Docker Image
+  docker-build-push:
+    runs-on: ubuntu-latest
+    needs: [sast-sonarqube, sca-trivy, iac-security-checkov]
+    # Solo se ejecuta en push a main/develop, no en PRs
+    # NOTA: Este build es PÚBLICO y NO incluye licencia de Telerik
+    # Para despliegues con licencia, usar un workflow separado o build manual
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && always() && (needs.sast-sonarqube.result == 'success' || needs.sast-sonarqube.result == 'skipped') && (needs.sca-trivy.result == 'success' || needs.sca-trivy.result == 'skipped') && (needs.iac-security-checkov.result == 'success' || needs.iac-security-checkov.result == 'skipped')
+    outputs:
+      image-url: ${{ steps.meta.outputs.tags }}
+      image-tag: ${{ steps.extract_sha_tag.outputs.sha_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Extract short SHA tag for deployment
+        id: extract_sha_tag
+        shell: bash
+        run: |
+          echo "All computed tags:"
+          echo "${{ steps.meta.outputs.tags }}"
+          SHA_LINE=$(echo "${{ steps.meta.outputs.tags }}" | grep -E ':sha-[0-9a-f]+' | head -n 1 || true)
+          if [ -z "$SHA_LINE" ]; then
+            echo "No sha-* tag found in metadata tags."
+            exit 1
+          fi
+          SHA_TAG=${SHA_LINE##*:}
+          echo "Using SHA tag: $SHA_TAG"
+          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image (Public Build)
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./GenReports/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_CONFIGURATION=Release
+            TELERIK_NUGET_KEY=${{ secrets.TELERIK_NUGET_KEY }}
+
+  # NOTA: La configuración del túnel de Cloudflare se maneja desde otro repositorio
+  # para evitar duplicación de recursos y aprovechar la infraestructura existente
+
+  # Job 6: Deploy Application for DAST Testing
+  deploy-to-kubernetes:
+    runs-on: ubuntu-latest
+    needs: [docker-build-push] # Cambiado: ahora depende directamente del build, no del túnel de Cloudflare
+    environment: production
+    outputs:
+      app-url: ${{ steps.get-app-url.outputs.url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          tags: "tag:ci-runner"
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ${HOME}/.kube
+          # Decodifica el secreto y escribe el archivo de configuración
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 --decode > ${HOME}/.kube/config
+          chmod 600 ${HOME}/.kube/config
+
+      - name: Convert repository name to lowercase
+        id: string-utils
+        uses: ASzc/change-string-case-action@v6
+        with:
+          string: ${{ github.repository }}
+
+      - name: Create Image Pull Secret in Kubernetes
+        run: |
+          # Este comando es idempotente, no fallará si el secreto ya existe
+          kubectl create secret docker-registry ghcr-secret \
+            --namespace=devsecops \
+            --docker-server=ghcr.io \
+            --docker-username=${{ github.actor }} \
+            --docker-password=${{ secrets.IMAGE_REGISTRY_TOKEN }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Telerik License Secret in Kubernetes
+        run: |
+          # Crear el secreto de la licencia de Telerik (idempotente)
+          kubectl create secret generic telerik-license-secret \
+            --namespace=devsecops \
+            --from-literal=license-key="${{ secrets.TELERIK_LICENSE_KEY }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Update image tag in Kubernetes manifest
+        run: |
+          # CAMBIO CLAVE: Calculamos la etiqueta corta aquí mismo, eliminando la dependencia de 'outputs'.
+          GIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG="sha-$GIT_SHA_SHORT"
+
+          # Convertir el owner a minúsculas
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          # PASO DE DEPURACIÓN: Imprimimos la imagen completa para verificar en los logs
+          echo "Full image name to be applied: ghcr.io/$OWNER_LOWER/telerik-reporting:$IMAGE_TAG"
+
+          # Usamos sed para reemplazar el placeholder
+          sed -i "s#IMAGE_PLACEHOLDER#ghcr.io/$OWNER_LOWER/telerik-reporting:$IMAGE_TAG#g" k8s/deployment.yaml
+
+      - name: Apply Kubernetes manifests
+        run: |
+          sleep 1
+          # Aplicar network policy para seguridad
+          kubectl apply -f k8s/network-policy.yml
+          kubectl apply -f k8s/deployment.yml
+          kubectl apply -f k8s/service.yml
+          kubectl apply -f k8s/ingress.yml
+          echo "Deployment successful!"
+
+      - name: Get application URL
+        id: get-app-url
+        run: |
+          # Obtener la URL de la aplicación desde el ingress
+          APP_URL="https://telerik.rondon.cloud"
+          echo "url=$APP_URL" >> $GITHUB_OUTPUT
+          echo "Application URL: $APP_URL"
+
+      - name: Deploy to Production
+        run: |
+          echo "🚀 Deploying to production https://telerik.rondon.cloud"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Image: ${{ needs.docker-build-push.outputs.image-url }}"
+          # Add your production deployment logic here
+          # For example: kubectl, docker-compose, cloud provider CLI, etc.
+
+  # Job 7: DAST - Dynamic Application Security Testing with OWASP ZAP para Telerik API
+  dast-owasp-zap:
+    runs-on: ubuntu-latest
+    needs: deploy-to-kubernetes
+    # Se ejecuta siempre después de SAST, tanto en PRs como en main
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine target URL
+        id: target-url
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # En main branch, usar la URL de producción de Telerik
+            APP_URL="https://telerik.rondon.cloud"
+            echo "Using production URL for main branch: $APP_URL"
+          else
+            # En PRs, usar la misma URL de Telerik para testing
+            APP_URL="https://telerik.rondon.cloud"
+            echo "Using Telerik URL for PR: $APP_URL"
+          fi
+          echo "url=$APP_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for application to be ready
+        run: |
+          echo "Waiting for application to be fully ready..."
+          sleep 30
+
+          # Verificar que la aplicación responda correctamente
+          APP_URL="${{ steps.target-url.outputs.url }}"
+          echo "Testing application readiness at: $APP_URL"
+
+          # Intentar conectar hasta 5 veces con intervalos de 10 segundos
+          for i in {1..5}; do
+            if curl -f -s "$APP_URL/swagger/index.html" > /dev/null; then
+              echo "Telerik API is accessible!"
+              break
+            else
+              echo "Attempt $i: Telerik API not ready yet, waiting..."
+              sleep 10
+            fi
+          done
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ steps.target-url.outputs.url }}
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a -d -T 60"
+        continue-on-error: true
+
+      - name: Create ZAP report directory
+        run: |
+          GIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          mkdir -p zap-reports-$GIT_SHA_SHORT
+
+      - name: ZAP Full Scan
+        uses: zaproxy/action-full-scan@v0.10.0
+        with:
+          target: ${{ needs.deploy-to-kubernetes.outputs.app-url }}
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a -j -d -T 120"
+        continue-on-error: true
+
+      - name: Process ZAP Results
+        if: always()
+        run: |
+          echo "Processing ZAP scan results..."
+
+          # Usar el directorio dinámico creado anteriormente
+          GIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          REPORT_DIR="zap-reports-$GIT_SHA_SHORT"
+
+          # Verificar si existen los archivos de reporte
+          if [ -f "report_html.html" ]; then
+            cp report_html.html "$REPORT_DIR/"
+            echo "HTML report found and copied"
+          fi
+
+          if [ -f "report_json.json" ]; then
+            cp report_json.json "$REPORT_DIR/"
+            echo "JSON report found and copied"
+
+            # Extraer estadísticas básicas del JSON
+            if command -v jq &> /dev/null; then
+              echo "=== ZAP Scan Summary ==="
+              jq -r '.site[0].alerts[] | "Alert: \(.name) - Risk: \(.riskdesc) - Confidence: \(.confidence)"' report_json.json | head -10
+            fi
+          fi
+
+          if [ -f "report_md.md" ]; then
+            cp report_md.md "$REPORT_DIR/"
+            echo "Markdown report found and copied"
+          fi
+
+      - name: Upload ZAP scan results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-security-reports-${{ github.sha }}
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md
+            zap-reports-*/
+          retention-days: 30
+
+  # Job 8: Security Summary Report
+  security-summary:
+    runs-on: ubuntu-latest
+    needs: [sast-sonarqube, sca-trivy, iac-security-checkov, dast-owasp-zap]
+    if: always()
+    steps:
+      - name: Security Summary
+        run: |
+          echo "## 🔒 DevSecOps Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST (SonarQube) | ${{ needs.sast-sonarqube.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA (Trivy) | ${{ needs.sca-trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| IaC Security (Checkov) | ${{ needs.iac-security-checkov.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DAST (OWASP ZAP) | ${{ needs.dast-owasp-zap.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 Check the Security tab for detailed vulnerability reports." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: genreports-api
+  labels:
+    app: genreports-api
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: genreports-api
+  template:
+    metadata:
+      labels:
+        app: genreports-api
+        version: v1
+    spec:
+      containers:
+      - name: genreports-api
+        image: IMAGE_PLACEHOLDER
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8081
+          name: https
+          protocol: TCP
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Docker"
+        - name: ASPNETCORE_HTTP_PORTS
+          value: "8080"
+        - name: ASPNETCORE_HTTPS_PORTS
+          value: "8081"
+        - name: ASPNETCORE_URLS
+          value: "http://+:8080;https://+:8081"
+        # Telerik License Configuration
+        - name: TELERIK_LICENSE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: telerik-license-secret
+              key: license-key
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: reports-storage
+          mountPath: /app/reports
+      volumes:
+      - name: reports-storage
+        emptyDir: {}
+      restartPolicy: Always
+---
