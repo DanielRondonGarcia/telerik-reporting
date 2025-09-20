@@ -35,9 +35,9 @@ namespace GenReports.Controllers
             OperationId = "DownloadFileByToken"
         )]
         [ProducesResponseType(typeof(FileContentResult), 200)] // Respuesta de éxito es un archivo
-        [ProducesResponseType(typeof(ApiResponse<object>), 400, "El token proporcionado es nulo o vacío.")]
-        [ProducesResponseType(typeof(ApiResponse<object>), 404, "No se encontró ningún archivo asociado al token, o este ha expirado.")]
-        [ProducesResponseType(typeof(ApiResponse<object>), 500, "Ocurrió un error interno al procesar la solicitud.")]
+        [ProducesResponseType(typeof(ApiResponse<object>), 400)]
+        [ProducesResponseType(typeof(ApiResponse<object>), 404)]
+        [ProducesResponseType(typeof(ApiResponse<object>), 500)]
         public async Task<IActionResult> DownloadFile(string token)
         {
             try
