@@ -61,11 +61,5 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        volumeMounts:
-        - name: reports-storage
-          mountPath: /app/reports
-      volumes:
-      - name: reports-storage
-        emptyDir: {}
       restartPolicy: Always
 ---

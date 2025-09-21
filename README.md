@@ -493,8 +493,6 @@ Puedes configurar la variable en las propiedades del proyecto o en el archivo `l
 
 Los fingerprints de certificados pueden cambiar. Verificar periódicamente:
 
-- Certificado de Telerik: `3F9001EA83C560D712C24CF213C3D312CB3BFF51EE89435D3430BD06B5D0EECE`
-- Certificado de NuGet.org: `0E5F38F57DC1BCC806D8494F4F90FBCEDD988B46760709CBEEC6F4219AA6157D`
 
 ### Renovación de Licencia
 
