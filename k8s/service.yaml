@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: genreports-api-service
+  namespace: genreports
   labels:
     app: genreports-api
 spec:
@@ -22,6 +23,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: genreports-api-nodeport
+  namespace: genreports
   labels:
     app: genreports-api
 spec:

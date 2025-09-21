@@ -1,0 +1,77 @@
+# k8s/network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: genreports-api-network-policy
+  namespace: genreports
+spec:
+  # Aplicar esta política a los pods con la etiqueta app: genreports-api
+  podSelector:
+    matchLabels:
+      app: genreports-api
+  
+  # Tipos de tráfico que esta política afecta
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Reglas de tráfico entrante (Ingress)
+  ingress:
+  # Permitir tráfico HTTP desde otros pods en el mismo namespace
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+  
+  # Permitir tráfico desde el Ingress Controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+  
+  # Permitir tráfico desde servicios externos (LoadBalancer/NodePort)
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+  
+  # Reglas de tráfico saliente (Egress)
+  egress:
+  # Permitir DNS (necesario para resolución de nombres)
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Permitir tráfico HTTPS saliente (para APIs externas, NuGet, etc.)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Permitir tráfico HTTP saliente (si es necesario)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  
+  # Permitir comunicación con otros servicios en el cluster
+  - to:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081

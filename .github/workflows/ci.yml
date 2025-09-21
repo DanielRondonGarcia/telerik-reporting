@@ -295,11 +295,12 @@ jobs:
       - name: Apply Kubernetes manifests
         run: |
           sleep 1
-          # Aplicar network policy para seguridad
-          kubectl apply -f k8s/network-policy.yml
+          kubectl apply -f k8s/namespace.yml
+          kubectl apply -f k8s/configmap.yml
           kubectl apply -f k8s/deployment.yml
           kubectl apply -f k8s/service.yml
           kubectl apply -f k8s/ingress.yml
+          kubectl apply -f k8s/network-policy.yml
           echo "Deployment successful!"
 
       - name: Get application URL

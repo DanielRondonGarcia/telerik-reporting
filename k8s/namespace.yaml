@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: genreports
+  labels:
+    name: genreports
+    app: genreports-api
+    environment: production
