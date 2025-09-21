@@ -292,6 +292,14 @@ jobs:
           # Usamos sed para reemplazar el placeholder
           sed -i "s#IMAGE_PLACEHOLDER#ghcr.io/$OWNER_LOWER/telerik-reporting:$IMAGE_TAG#g" k8s/deployment.yaml
 
+      - name: Create Telerik License Secret
+        run: |
+          # Crear el secret de la licencia de Telerik en el namespace genreports
+          kubectl create secret generic telerik-license-secret \
+            --from-literal=license="${{ secrets.TELERIK_LICENSE_KEY }}" \
+            --namespace=genreports \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Apply Kubernetes manifests
         run: |
           sleep 1
