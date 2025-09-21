@@ -20,6 +20,9 @@ spec:
       containers:
       - name: genreports-api
         image: IMAGE_PLACEHOLDER
+        volumeMounts:
+        - name: temp-downloads-storage
+          mountPath: /app/temp_downloads
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -61,5 +64,9 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+      volumes:
+      - name: temp-downloads-storage
+        persistentVolumeClaim:
+          claimName: genreports-temp-storage-pvc
       restartPolicy: Always
 ---

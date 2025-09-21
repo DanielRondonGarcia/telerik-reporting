@@ -1,0 +1,16 @@
+# pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: genreports-temp-storage-pvc
+  namespace: genreports
+spec:
+  # ¡Este modo es crucial para que múltiples pods puedan leer y escribir!
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi # Puedes ajustar este tamaño según tus necesidades
+  # Debes reemplazar 'your-rwx-storage-class' por el nombre de la
+  # StorageClass correcta disponible en tu clúster (ej. 'nfs-client').
+  storageClassName: nfs-shared
