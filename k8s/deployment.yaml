@@ -25,18 +25,13 @@ spec:
         - containerPort: 8080
           name: http
           protocol: TCP
-        - containerPort: 8081
-          name: https
-          protocol: TCP
         env:
         - name: ASPNETCORE_ENVIRONMENT
           value: "Docker"
         - name: ASPNETCORE_HTTP_PORTS
           value: "8080"
-        - name: ASPNETCORE_HTTPS_PORTS
-          value: "8081"
         - name: ASPNETCORE_URLS
-          value: "http://+:8080;https://+:8081"
+          value: "http://+:8080"
         # Telerik License Configuration
         - name: TELERIK_LICENSE_KEY
           valueFrom:
