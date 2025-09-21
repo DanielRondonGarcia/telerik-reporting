@@ -80,7 +80,7 @@ RUN mkdir -p /app/reports
 COPY --from=publish /app/publish .
 
 # Copiar plantillas de reportes
-COPY reports/ /app/reports/
+COPY GenReports/reports/ /app/reports/
 
 # Establecer permisos para el directorio de reportes
 RUN chmod -R 755 /app/reports && \
