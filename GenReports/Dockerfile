@@ -37,6 +37,7 @@ RUN if [ -z "$TELERIK_NUGET_KEY" ]; then \
         dotnet restore "./GenReports/GenReports.csproj"; \
     fi
 COPY GenReports/ ./GenReports/
+COPY GenReports/reports/ ./GenReports/reports/
 WORKDIR "/src/GenReports"
 RUN dotnet build "GenReports.csproj" -c $BUILD_CONFIGURATION -o /app/build
 

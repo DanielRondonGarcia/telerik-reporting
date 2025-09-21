@@ -53,7 +53,7 @@ namespace GenReports.Controllers
         public async Task<IActionResult> QueueReportMultipart(
             [FromForm, Required] string reportType,
             [FromForm, Required] string userName,
-            [FromForm, Required] IFormFile dataFile,
+            [Required] IFormFile dataFile,
             [FromForm] string processingMode = "batch")
         {
             // --- Validación de Entrada ---
