@@ -259,11 +259,15 @@ jobs:
         with:
           string: ${{ github.repository }}
 
+      - name: Ensure Kubernetes namespace exists (genreports)
+        run: |
+          kubectl create namespace genreports --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Create Image Pull Secret in Kubernetes
         run: |
           # Este comando es idempotente, no fallará si el secreto ya existe
           kubectl create secret docker-registry ghcr-secret \
-            --namespace=devsecops \
+            --namespace=genreports \
             --docker-server=ghcr.io \
             --docker-username=${{ github.actor }} \
             --docker-password=${{ secrets.GITHUB_TOKEN }} \
@@ -273,7 +277,7 @@ jobs:
         run: |
           # Crear el secreto de la licencia de Telerik (idempotente)
           kubectl create secret generic telerik-license-secret \
-            --namespace=devsecops \
+            --namespace=genreports \
             --from-literal=license-key="${{ secrets.TELERIK_LICENSE_KEY }}" \
             --dry-run=client -o yaml | kubectl apply -f -
 
@@ -294,9 +298,9 @@ jobs:
 
       - name: Create Telerik License Secret
         run: |
-          # Crear el secret de la licencia de Telerik en el namespace genreports
+          # Crear/actualizar el secret de la licencia de Telerik en el namespace genreports (idempotente)
           kubectl create secret generic telerik-license-secret \
-            --from-literal=license="${{ secrets.TELERIK_LICENSE_KEY }}" \
+            --from-literal=license-key="${{ secrets.TELERIK_LICENSE_KEY }}" \
             --namespace=genreports \
             --dry-run=client -o yaml | kubectl apply -f -
 
