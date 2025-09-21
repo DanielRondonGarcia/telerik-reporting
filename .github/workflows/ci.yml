@@ -266,7 +266,7 @@ jobs:
             --namespace=devsecops \
             --docker-server=ghcr.io \
             --docker-username=${{ github.actor }} \
-            --docker-password=${{ secrets.IMAGE_REGISTRY_TOKEN }} \
+            --docker-password=${{ secrets.GITHUB_TOKEN }} \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Create Telerik License Secret in Kubernetes
